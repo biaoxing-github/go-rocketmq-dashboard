@@ -8,6 +8,23 @@
 - 通过 `goadmin` 执行和官方 `mqadmin` 兼容的只读命令
 - 支持 Docker 部署
 
+## 性能对比
+
+`goadmin` 的目标是保持官方 `mqadmin` 输出兼容，同时减少每次命令都启动 JVM tools 进程的开销。下图使用同一套 Docker 验证环境中的真实 RocketMQ 样本，展示项均已完成 stdout/stderr/exit-code 对官方输出的 diff 对齐。
+
+![goadmin 与官方 mqadmin 性能对比](docs/assets/performance-speedup.svg)
+
+| 场景 | 官方 `mqadmin` 平均耗时 | `goadmin` auto/native 平均耗时 | 加速比 |
+| --- | ---: | ---: | ---: |
+| `topicList` | 4312 ms | 7.4 ms | 583x |
+| `topicStatus -c` | 4465 ms | 7.2 ms | 620x |
+| `consumerProgress -g -t -c` | 3970 ms | 11.6 ms | 342x |
+| `getBrokerConfig` | 7205 ms | 6.4 ms | 1126x |
+| `printMsgByQueue -f` | 3985 ms | 11.8 ms | 338x |
+| 93 条 `queryMsgById` 真实消息批量对照 | 5867 ms | 101 ms | 58x |
+
+数值会随机器、容器和 Broker 状态波动，建议主要看同环境下的相对差异：官方进程路径稳定在秒级，Go 原生路径通常在个位到几十毫秒级。
+
 ## 快速开始
 
 ```powershell

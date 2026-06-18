@@ -1,0 +1,82 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="980" height="620" viewBox="0 0 980 620" role="img" aria-labelledby="title desc">
+  <title id="title">goadmin speedup compared with official mqadmin</title>
+  <desc id="desc">Horizontal bar chart showing sidecar and goadmin auto/native speedup versus official mqadmin, where official mqadmin is the 1x baseline.</desc>
+  <rect width="980" height="620" fill="#ffffff"/>
+  <text x="32" y="42" font-family="Segoe UI, Arial, sans-serif" font-size="24" font-weight="700" fill="#111827">goadmin vs official mqadmin</text>
+  <text x="32" y="70" font-family="Segoe UI, Arial, sans-serif" font-size="14" fill="#4b5563">Average speedup from real RocketMQ parity samples. Official mqadmin process = 1x baseline. Higher is better.</text>
+
+  <rect x="32" y="92" width="18" height="10" rx="2" fill="#94a3b8"/>
+  <text x="58" y="102" font-family="Segoe UI, Arial, sans-serif" font-size="13" fill="#374151">sidecar</text>
+  <rect x="132" y="92" width="18" height="10" rx="2" fill="#14b8a6"/>
+  <text x="158" y="102" font-family="Segoe UI, Arial, sans-serif" font-size="13" fill="#374151">goadmin auto/native</text>
+
+  <g font-family="Segoe UI, Arial, sans-serif" font-size="11" fill="#6b7280">
+    <line x1="330" y1="118" x2="330" y2="555" stroke="#e5e7eb"/>
+    <line x1="452" y1="118" x2="452" y2="555" stroke="#e5e7eb"/>
+    <line x1="574" y1="118" x2="574" y2="555" stroke="#e5e7eb"/>
+    <line x1="696" y1="118" x2="696" y2="555" stroke="#e5e7eb"/>
+    <line x1="817" y1="118" x2="817" y2="555" stroke="#e5e7eb"/>
+    <line x1="939" y1="118" x2="939" y2="555" stroke="#e5e7eb"/>
+    <text x="326" y="578">0x</text>
+    <text x="441" y="578">250x</text>
+    <text x="562" y="578">500x</text>
+    <text x="684" y="578">750x</text>
+    <text x="802" y="578">1000x</text>
+    <text x="922" y="578">1250x</text>
+  </g>
+
+  <g font-family="Segoe UI, Arial, sans-serif">
+    <g>
+      <rect x="24" y="120" width="920" height="62" fill="#f8fafc"/>
+      <text x="32" y="147" font-size="14" font-weight="600" fill="#111827">topicList</text>
+      <rect x="330" y="126" width="101" height="16" rx="4" fill="#94a3b8"/>
+      <text x="439" y="139" font-size="12" fill="#374151">207x</text>
+      <rect x="330" y="150" width="284" height="16" rx="4" fill="#14b8a6"/>
+      <text x="622" y="163" font-size="12" font-weight="600" fill="#0f766e">583x</text>
+    </g>
+
+    <g>
+      <text x="32" y="221" font-size="14" font-weight="600" fill="#111827">topicStatus -c</text>
+      <rect x="330" y="200" width="83" height="16" rx="4" fill="#94a3b8"/>
+      <text x="421" y="213" font-size="12" fill="#374151">170x</text>
+      <rect x="330" y="224" width="302" height="16" rx="4" fill="#14b8a6"/>
+      <text x="640" y="237" font-size="12" font-weight="600" fill="#0f766e">620x</text>
+    </g>
+
+    <g>
+      <rect x="24" y="268" width="920" height="62" fill="#f8fafc"/>
+      <text x="32" y="295" font-size="14" font-weight="600" fill="#111827">consumerProgress -g -t -c</text>
+      <rect x="330" y="274" width="45" height="16" rx="4" fill="#94a3b8"/>
+      <text x="383" y="287" font-size="12" fill="#374151">92x</text>
+      <rect x="330" y="298" width="167" height="16" rx="4" fill="#14b8a6"/>
+      <text x="505" y="311" font-size="12" font-weight="600" fill="#0f766e">342x</text>
+    </g>
+
+    <g>
+      <text x="32" y="369" font-size="14" font-weight="600" fill="#111827">getBrokerConfig</text>
+      <rect x="330" y="348" width="136" height="16" rx="4" fill="#94a3b8"/>
+      <text x="474" y="361" font-size="12" fill="#374151">279x</text>
+      <rect x="330" y="372" width="548" height="16" rx="4" fill="#14b8a6"/>
+      <text x="886" y="385" font-size="12" font-weight="600" fill="#0f766e">1126x</text>
+    </g>
+
+    <g>
+      <rect x="24" y="416" width="920" height="62" fill="#f8fafc"/>
+      <text x="32" y="443" font-size="14" font-weight="600" fill="#111827">printMsgByQueue -f</text>
+      <rect x="330" y="422" width="42" height="16" rx="4" fill="#94a3b8"/>
+      <text x="380" y="435" font-size="12" fill="#374151">86x</text>
+      <rect x="330" y="446" width="165" height="16" rx="4" fill="#14b8a6"/>
+      <text x="503" y="459" font-size="12" font-weight="600" fill="#0f766e">338x</text>
+    </g>
+
+    <g>
+      <text x="32" y="517" font-size="14" font-weight="600" fill="#111827">93 known-message queryMsgById</text>
+      <rect x="330" y="496" width="4" height="16" rx="2" fill="#94a3b8"/>
+      <text x="342" y="509" font-size="12" fill="#374151">5.4x</text>
+      <rect x="330" y="520" width="28" height="16" rx="4" fill="#14b8a6"/>
+      <text x="366" y="533" font-size="12" font-weight="600" fill="#0f766e">58x</text>
+    </g>
+  </g>
+
+  <text x="32" y="603" font-family="Segoe UI, Arial, sans-serif" font-size="12" fill="#6b7280">All displayed samples matched official stdout/stderr/exit-code after the documented parity normalization for dynamic fields.</text>
+</svg>
