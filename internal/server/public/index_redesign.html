@@ -1,0 +1,753 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>RocketMQ Go Dashboard Redesign Reference</title>
+    <style>
+      :root {
+        --bg-app: #FAFAFA;
+        --bg-sidebar: #FFFFFF;
+        --bg-panel: #FFFFFF;
+        --fg-main: #111111;
+        --fg-muted: #666666;
+        --fg-light: #999999;
+        --border: #EAEAEA;
+        --border-strong: #DDDDDD;
+        --accent: #E34D2E;
+        --accent-hover: #C23A1E;
+        --accent-bg: rgba(227, 77, 46, 0.08);
+        --ok: #2D8A56;
+        --warn: #D97706;
+        --danger: #DC2626;
+        --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        --font-mono: "JetBrains Mono", "SF Mono", Consolas, Menlo, monospace;
+      }
+
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      
+      body {
+        font-family: var(--font-sans);
+        background-color: var(--bg-app);
+        color: var(--fg-main);
+        line-height: 1.5;
+        -webkit-font-smoothing: antialiased;
+      }
+      
+      a { text-decoration: none; color: inherit; }
+      button { appearance: none; border: none; background: transparent; font-family: inherit; cursor: pointer; }
+
+      .app-shell {
+        display: grid;
+        grid-template-columns: 240px 1fr;
+        min-height: 100vh;
+      }
+      
+      .sidebar {
+        background: var(--bg-sidebar);
+        border-right: 1px solid var(--border);
+        display: flex;
+        flex-direction: column;
+        padding: 32px 24px;
+        position: sticky;
+        top: 0;
+        height: 100vh;
+      }
+      
+      .content {
+        padding: 48px 56px 80px;
+        max-width: 1400px;
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 48px;
+      }
+      
+      .brand-mark svg {
+        width: 20px;
+        height: 20px;
+        color: var(--accent);
+      }
+      
+      .brand-copy strong {
+        display: block;
+        font-size: 14px;
+        font-weight: 600;
+        letter-spacing: -0.01em;
+      }
+      
+      .brand-copy span {
+        display: block;
+        font-size: 12px;
+        color: var(--fg-muted);
+      }
+      
+      .side-nav {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        margin-bottom: auto;
+      }
+      
+      .side-nav a {
+        padding: 8px 12px;
+        font-size: 13px;
+        font-weight: 500;
+        color: var(--fg-muted);
+        border-radius: 6px;
+        transition: all 0.2s;
+      }
+      
+      .side-nav a:hover {
+        color: var(--fg-main);
+        background: rgba(0,0,0,0.03);
+      }
+      
+      .side-nav a.active {
+        color: var(--accent);
+        background: var(--accent-bg);
+      }
+      
+      .sidebar-stack {
+        margin-top: 48px;
+        padding-top: 24px;
+        border-top: 1px solid var(--border);
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+      }
+      
+      .sidebar-block .sidebar-label {
+        display: block;
+        font-size: 10px;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--fg-light);
+        margin-bottom: 4px;
+      }
+      
+      .sidebar-block strong {
+        font-size: 12px;
+        font-family: var(--font-mono);
+        word-break: break-all;
+      }
+
+      .topbar {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-end;
+        margin-bottom: 48px;
+      }
+      
+      .topbar-copy .eyebrow {
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--accent);
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        margin-bottom: 8px;
+        display: block;
+      }
+      
+      .topbar-copy h1 {
+        font-size: 28px;
+        font-weight: 500;
+        letter-spacing: -0.02em;
+        margin-bottom: 8px;
+      }
+      
+      .topbar-copy .lead {
+        font-size: 14px;
+        color: var(--fg-muted);
+        max-width: 600px;
+      }
+      
+      .topbar-actions {
+        display: flex;
+        gap: 12px;
+      }
+      
+      .button {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 16px;
+        font-size: 13px;
+        font-weight: 500;
+        border-radius: 6px;
+        border: 1px solid var(--border-strong);
+        transition: all 0.2s;
+      }
+      
+      .button:hover {
+        border-color: var(--fg-muted);
+        background: rgba(0,0,0,0.02);
+      }
+      
+      .button-primary {
+        background: var(--fg-main);
+        color: #fff;
+        border-color: var(--fg-main);
+      }
+      
+      .button-primary:hover {
+        background: #000;
+        border-color: #000;
+      }
+      
+      .button svg { width: 16px; height: 16px; }
+
+      .kpi-grid {
+        display: grid;
+        grid-template-columns: repeat(6, 1fr);
+        gap: 24px;
+        margin-bottom: 48px;
+        padding-bottom: 40px;
+        border-bottom: 1px solid var(--border);
+      }
+      
+      .kpi-card {
+        display: flex;
+        flex-direction: column;
+      }
+      
+      .kpi-card span {
+        font-size: 12px;
+        color: var(--fg-muted);
+        margin-bottom: 8px;
+      }
+      
+      .kpi-card strong {
+        font-size: 24px;
+        font-family: var(--font-mono);
+        font-weight: 400;
+        margin-bottom: 4px;
+      }
+      
+      .kpi-card small {
+        font-size: 11px;
+        color: var(--fg-light);
+      }
+
+      .panel {
+        margin-bottom: 48px;
+      }
+      
+      .panel-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        margin-bottom: 24px;
+      }
+      
+      .panel-head h2 {
+        font-size: 18px;
+        font-weight: 500;
+        margin-bottom: 4px;
+      }
+      
+      .panel-head p {
+        font-size: 13px;
+        color: var(--fg-muted);
+      }
+      
+      .panel-meta {
+        text-align: right;
+        display: flex;
+        flex-direction: column;
+        align-items: flex-end;
+        gap: 8px;
+      }
+      
+      .panel-meta > span {
+        font-size: 11px;
+        color: var(--fg-light);
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+      }
+      
+      .status-pills {
+        display: flex;
+        gap: 6px;
+      }
+      
+      .pill {
+        font-size: 11px;
+        font-family: var(--font-mono);
+        padding: 4px 8px;
+        border-radius: 4px;
+        border: 1px solid var(--border);
+        background: #fff;
+      }
+      
+      .pill-ok { color: var(--ok); border-color: rgba(45,138,86,0.3); background: rgba(45,138,86,0.05); }
+      .pill-info { color: var(--accent); border-color: rgba(227,77,46,0.3); background: rgba(227,77,46,0.05); }
+      .pill-muted { color: var(--fg-muted); }
+
+      .topic-layout {
+        display: grid;
+        grid-template-columns: 1.2fr 1fr;
+        gap: 32px;
+      }
+      
+      .table-wrap {
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: var(--bg-panel);
+        overflow: hidden;
+      }
+      
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        text-align: left;
+      }
+      
+      th {
+        font-size: 11px;
+        font-weight: 500;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--fg-muted);
+        padding: 12px 16px;
+        border-bottom: 1px solid var(--border);
+        background: #FAFAFA;
+      }
+      
+      td {
+        font-size: 13px;
+        padding: 12px 16px;
+        border-bottom: 1px solid var(--border);
+        color: var(--fg-main);
+      }
+      
+      tr:last-child td { border-bottom: none; }
+      
+      .tag {
+        font-size: 11px;
+        padding: 2px 6px;
+        border-radius: 4px;
+        border: 1px solid;
+      }
+      
+      .tag-normal { border-color: var(--border-strong); color: var(--fg-muted); }
+      .tag-retry { border-color: rgba(217,119,6,0.3); color: var(--warn); background: rgba(217,119,6,0.05); }
+      
+      .route-action {
+        font-size: 12px;
+        color: var(--accent);
+        padding: 4px 8px;
+        border: 1px solid transparent;
+        border-radius: 4px;
+        transition: all 0.2s;
+      }
+      
+      .route-action:hover {
+        background: var(--accent-bg);
+      }
+      
+      .route-action.active {
+        background: var(--accent);
+        color: #fff;
+      }
+
+      .route-panel {
+        display: flex;
+        flex-direction: column;
+        gap: 24px;
+      }
+      
+      .result-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding-bottom: 8px;
+        border-bottom: 1px solid var(--border);
+      }
+      
+      .result-head h3 {
+        font-size: 14px;
+        font-weight: 600;
+      }
+      
+      .result-head span {
+        font-size: 12px;
+        color: var(--fg-light);
+      }
+      
+      .summary-grid {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 16px;
+      }
+      
+      .summary-grid div {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+      
+      .summary-grid span {
+        font-size: 11px;
+        color: var(--fg-muted);
+      }
+      
+      .summary-grid strong {
+        font-size: 13px;
+        font-family: var(--font-mono);
+        word-break: break-all;
+      }
+      
+      .mono { font-family: var(--font-mono); }
+
+      .chain-results {
+        display: grid;
+        grid-template-columns: 320px 1fr;
+        gap: 32px;
+      }
+      
+      .result-block {
+        display: flex;
+        flex-direction: column;
+        gap: 24px;
+      }
+      
+      .timeline {
+        display: flex;
+        flex-direction: column;
+        gap: 0;
+      }
+      
+      .timeline-step {
+        display: flex;
+        gap: 16px;
+      }
+      
+      .timeline-time {
+        width: 56px;
+        font-size: 11px;
+        font-family: var(--font-mono);
+        color: var(--fg-muted);
+        padding-top: 4px;
+        text-align: right;
+        flex-shrink: 0;
+      }
+      
+      .timeline-body {
+        flex: 1;
+        padding-left: 16px;
+        border-left: 1px solid var(--border-strong);
+        position: relative;
+        padding-bottom: 24px;
+      }
+      
+      .timeline-body::before {
+        content: '';
+        position: absolute;
+        left: -4px;
+        top: 8px;
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: #fff;
+        border: 2px solid var(--fg-muted);
+      }
+      
+      .timeline-step:last-child .timeline-body {
+        border-left-color: transparent;
+        padding-bottom: 0;
+      }
+      
+      .timeline-step:last-child .timeline-body::before {
+        border-color: var(--ok);
+        background: var(--ok);
+      }
+      
+      .timeline-head {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 8px;
+      }
+      
+      .timeline-head strong {
+        font-size: 13px;
+        font-weight: 500;
+      }
+      
+      .timeline-body p {
+        font-family: var(--font-mono);
+        font-size: 12px;
+        background: var(--bg-sidebar);
+        border: 1px solid var(--border);
+        padding: 8px 12px;
+        border-radius: 6px;
+        margin-bottom: 8px;
+        word-break: break-all;
+        color: var(--fg-main);
+      }
+      
+      .timeline-body small {
+        font-size: 11px;
+        color: var(--fg-light);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 24 24" role="presentation">
+              <path d="M4 5h9l7 7-7 7H4l7-7z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" />
+            </svg>
+          </div>
+          <div class="brand-copy">
+            <strong>RocketMQ Go</strong>
+            <span>Design Reference</span>
+          </div>
+        </div>
+
+        <nav class="side-nav" aria-label="页面导航" role="tablist">
+          <a href="#overview" role="tab" aria-selected="true" class="active">总览</a>
+          <a href="#clusters" role="tab" aria-selected="false">集群</a>
+          <a href="#topics" role="tab" aria-selected="false">Topic</a>
+          <a href="#consumers" role="tab" aria-selected="false">Consumer</a>
+          <a href="#messages" role="tab" aria-selected="false">消息链路</a>
+        </nav>
+
+        <section class="sidebar-stack">
+          <div class="sidebar-block">
+            <span class="sidebar-label">NameServer</span>
+            <strong>127.0.0.1:9876</strong>
+          </div>
+          <div class="sidebar-block">
+            <span class="sidebar-label">Mode</span>
+            <strong>go-dashboard-mqadmin-provider</strong>
+          </div>
+          <div class="sidebar-block">
+            <span class="sidebar-label">Latency Budget</span>
+            <strong>500-1000 ms</strong>
+          </div>
+        </section>
+      </aside>
+
+      <main class="content">
+        <header class="topbar">
+          <div class="topbar-copy">
+            <p class="eyebrow">RocketMQ 控制台</p>
+            <h1>高密度运维视图</h1>
+            <p class="lead">
+              参考页固定工业化运维台方向：左侧轻量深色导航，右侧浅色内容区，所有状态以表格、胶囊标签和链路块呈现。
+            </p>
+          </div>
+          <div class="topbar-actions">
+            <button class="button button-primary" type="button">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M20 12a8 8 0 0 1-13.7 5.7M4 12a8 8 0 0 1 13.7-5.7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+                <path d="M15.5 3.5v4h-4M8.5 20.5v-4h4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+              </svg>
+              <span>刷新快照</span>
+            </button>
+            <button class="button button-secondary" type="button">查看链路</button>
+          </div>
+        </header>
+
+        <section class="kpi-grid" aria-label="概览指标">
+          <article class="kpi-card">
+            <span>Broker 版本</span>
+            <strong>V5_2_0</strong>
+            <small>DefaultCluster · 1 个 broker</small>
+          </article>
+          <article class="kpi-card">
+            <span>Topic 数</span>
+            <strong>42</strong>
+            <small>normal / retry / dlq / system</small>
+          </article>
+          <article class="kpi-card">
+            <span>Consumer 数</span>
+            <strong>16</strong>
+            <small>在线与离线组一起展示</small>
+          </article>
+          <article class="kpi-card">
+            <span>最大堆积</span>
+            <strong>22653</strong>
+            <small>有堆积</small>
+          </article>
+          <article class="kpi-card">
+            <span>链路耗时</span>
+            <strong>684 ms</strong>
+            <small>4 个节点</small>
+          </article>
+          <article class="kpi-card">
+            <span>快照状态</span>
+            <strong>已就绪</strong>
+            <small>三个只读快照并行刷新</small>
+          </article>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <div>
+              <h2>Topic message routing</h2>
+              <p>左表选择 Topic，右侧保持同页展开，快速核对读写队列、权限和 Broker 地址。</p>
+            </div>
+            <div class="panel-meta">
+              <span>缓存命中 · 已就绪 · 0 ms</span>
+              <div class="status-pills">
+                <span class="pill pill-ok">cache hit</span>
+                <span class="pill pill-ok">fresh</span>
+                <span class="pill pill-muted">21:53:35</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="topic-layout">
+            <div class="table-wrap compact">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Topic</th>
+                    <th>类型</th>
+                    <th>路由</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td>sample_order_events_topic</td>
+                    <td><span class="tag tag-normal">normal</span></td>
+                    <td><button class="route-action active" type="button">路由</button></td>
+                  </tr>
+                  <tr>
+                    <td>sample_notice_topic</td>
+                    <td><span class="tag tag-normal">normal</span></td>
+                    <td><button class="route-action" type="button">路由</button></td>
+                  </tr>
+                  <tr>
+                    <td>%RETRY%sample-order-events-consumer</td>
+                    <td><span class="tag tag-retry">retry</span></td>
+                    <td><button class="route-action" type="button">路由</button></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <div class="route-panel">
+              <div class="result-head">
+                <h3>Message Routing</h3>
+                <span>已加载 · 612 ms</span>
+              </div>
+              <div class="summary-grid">
+                <div>
+                  <span>Topic</span>
+                  <strong>sample_order_events_topic</strong>
+                </div>
+                <div>
+                  <span>读 / 写队列</span>
+                  <strong>4 / 4</strong>
+                </div>
+                <div>
+                  <span>路由行</span>
+                  <strong>1</strong>
+                </div>
+                <div>
+                  <span>Broker 数</span>
+                  <strong>1</strong>
+                </div>
+              </div>
+              <div class="table-wrap route-table">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Broker</th>
+                      <th>Cluster</th>
+                      <th>地址</th>
+                      <th>Read</th>
+                      <th>Write</th>
+                      <th>Perm</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td>broker-a</td>
+                      <td>DefaultCluster</td>
+                      <td class="mono route-addresses">0: 127.0.0.1:10911</td>
+                      <td class="mono">4</td>
+                      <td class="mono">4</td>
+                      <td><span class="pill pill-ok">RW</span></td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel chain-panel">
+          <div class="panel-head">
+            <div>
+              <h2>消息链路状态</h2>
+              <p>候选消息、消息摘要和状态时间线在同一页面内展开，减少排障时的上下文切换。</p>
+            </div>
+            <div class="panel-meta">
+              <span>CONSUMED</span>
+              <div class="status-pills">
+                <span class="pill pill-ok">CONSUMED</span>
+                <span class="pill pill-info">1 个候选</span>
+                <span class="pill pill-muted">684 ms</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="chain-results">
+            <div class="result-block">
+              <div class="result-head">
+                <h3>消息摘要</h3>
+                <span>CONSUMED</span>
+              </div>
+              <div class="summary-grid">
+                <div><span>Message ID</span><strong>7F00000100002A9F00000000000186A0</strong></div>
+                <div><span>Topic</span><strong>sample_notice_topic</strong></div>
+                <div><span>Queue</span><strong>0</strong></div>
+                <div><span>Store Host</span><strong>127.0.0.1:10911</strong></div>
+              </div>
+            </div>
+            <div class="result-block result-block-wide">
+              <div class="result-head">
+                <h3>状态链路</h3>
+                <span>4 个节点</span>
+              </div>
+              <div class="timeline">
+                <article class="timeline-step">
+                  <div class="timeline-time">21:31:02</div>
+                  <div class="timeline-body">
+                    <div class="timeline-head">
+                      <strong>发送成功</strong>
+                      <span class="pill pill-ok">ok</span>
+                    </div>
+                    <p>producer host=sample-service cost=12ms status=success</p>
+                    <small>producer · SEND_SUCCESS</small>
+                  </div>
+                </article>
+                <article class="timeline-step">
+                  <div class="timeline-time">21:31:03</div>
+                  <div class="timeline-body">
+                    <div class="timeline-head">
+                      <strong>消费完成</strong>
+                      <span class="pill pill-ok">ok</span>
+                    </div>
+                    <p>consumer group lag=0 status=CONSUMED</p>
+                    <small>sample-service · CONSUME_SUCCESS</small>
+                  </div>
+                </article>
+              </div>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+  </body>
+</html>

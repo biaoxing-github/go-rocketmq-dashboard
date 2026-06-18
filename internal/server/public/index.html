@@ -1,0 +1,831 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>RocketMQ Go Dashboard</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%231b2a33'/%3E%3Cpath d='M7 9h12l6 7-6 7H7l7-7z' fill='none' stroke='%23f0b95b' stroke-width='2.4' stroke-linejoin='round'/%3E%3C/svg%3E" />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 24 24" role="presentation">
+              <path d="M4 5h9l7 7-7 7H4l7-7z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" />
+            </svg>
+          </div>
+          <div class="brand-copy">
+            <strong>RocketMQ Go</strong>
+            <span>Operations Dashboard</span>
+          </div>
+        </div>
+
+        <nav class="side-nav" aria-label="页面导航" role="tablist">
+          <a href="#overview" data-tab="overview" role="tab" aria-selected="true" class="active">总览</a>
+          <a href="#clusters" data-tab="clusters" role="tab" aria-selected="false">集群</a>
+          <a href="#topics" data-tab="topics" role="tab" aria-selected="false">Topic</a>
+          <a href="#consumers" data-tab="consumers" role="tab" aria-selected="false">Consumer</a>
+          <a href="#messages" data-tab="messages" role="tab" aria-selected="false">消息</a>
+        </nav>
+
+        <section class="sidebar-stack">
+          <div class="sidebar-block">
+            <span class="sidebar-label">NameServer</span>
+            <strong id="nameServer">-</strong>
+            <div class="nameserver-actions">
+              <button id="openNameServerDialog" class="nameserver-open" type="button">添加 / 切换集群</button>
+            </div>
+            <span id="nameServerSwitchStatus" class="sidebar-note">等待配置</span>
+          </div>
+          <div class="sidebar-block">
+            <span class="sidebar-label">Mode</span>
+            <strong id="serviceMode">-</strong>
+          </div>
+          <div class="sidebar-block">
+            <span class="sidebar-label">Latency Budget</span>
+            <strong id="latencyBudget">-</strong>
+          </div>
+        </section>
+      </aside>
+
+      <main class="content">
+        <header class="topbar">
+          <div class="topbar-copy">
+            <p class="eyebrow">RocketMQ 控制台</p>
+            <h1>集群消息运维台</h1>
+            <p class="lead">
+              从 NameServer 进入集群，选择 Topic 后直接浏览保留窗口内的消息，并从消息行跳转到状态链路。
+            </p>
+          </div>
+          <div class="topbar-actions">
+            <button id="refreshButton" class="button button-primary" type="button">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M20 12a8 8 0 0 1-13.7 5.7M4 12a8 8 0 0 1 13.7-5.7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+                <path d="M15.5 3.5v4h-4M8.5 20.5v-4h4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+              </svg>
+              <span>刷新快照</span>
+            </button>
+            <button class="button button-secondary" type="button" data-tab-link="messages">消息链路</button>
+          </div>
+        </header>
+
+        <section class="kpi-grid page-view" id="overview" data-page="overview" aria-label="概览指标">
+          <article class="kpi-card">
+            <span>Broker 版本</span>
+            <strong id="brokerVersion">-</strong>
+            <small id="clusterMeta">等待加载</small>
+          </article>
+          <article class="kpi-card">
+            <span>Topic 数</span>
+            <strong id="topicCount">-</strong>
+            <small id="topicMeta">等待加载</small>
+          </article>
+          <article class="kpi-card">
+            <span>Consumer 数</span>
+            <strong id="consumerCount">-</strong>
+            <small id="consumerMeta">等待加载</small>
+          </article>
+          <article class="kpi-card">
+            <span>最大堆积</span>
+            <strong id="maxLag">-</strong>
+            <small id="consumerLagMeta">等待加载</small>
+          </article>
+          <article class="kpi-card">
+            <span>链路耗时</span>
+            <strong id="chainLatency">-</strong>
+            <small id="chainMeta">输入消息后展示</small>
+          </article>
+          <article class="kpi-card">
+            <span>快照状态</span>
+            <strong id="snapshotState">-</strong>
+            <small id="snapshotMeta">三个只读快照并行刷新</small>
+          </article>
+        </section>
+
+        <section class="panel page-view" id="clusters" data-page="clusters" hidden>
+          <div class="panel-head">
+            <div>
+              <h2>集群与 Broker</h2>
+              <p>展示 broker 自报版本、地址和链路负载，支持快速确认线上 MQ 版本。</p>
+            </div>
+            <div class="panel-meta">
+              <span id="clusterStatus">等待刷新</span>
+              <div class="status-pills" id="clusterMetaPills"></div>
+            </div>
+          </div>
+          <div class="table-wrap card-table">
+            <table>
+              <thead>
+                <tr>
+                  <th>Cluster</th>
+                  <th>Broker</th>
+                  <th>地址</th>
+                  <th>版本</th>
+                  <th>InTPS</th>
+                  <th>OutTPS</th>
+                  <th>状态</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody id="clusterRows"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel page-view" id="topics" data-page="topics" hidden>
+            <div class="panel-head">
+              <div>
+                <h2>Topic</h2>
+                <p>选择 Topic 后自动加载路由、队列水位和最近可回查消息。</p>
+              </div>
+              <div class="panel-meta">
+                <span id="topicStatus">等待刷新</span>
+                <div class="status-pills" id="topicMetaPills"></div>
+              </div>
+            </div>
+            <div class="topic-layout">
+              <div class="topic-list-panel">
+                <div class="topic-searchbar">
+                  <label for="topicSearchInput">
+                    <span>搜索 Topic</span>
+                    <input id="topicSearchInput" type="search" autocomplete="off" placeholder="名称 / 类型" />
+                  </label>
+                  <button id="topicSearchClear" class="route-action" type="button">清空</button>
+                  <span id="topicSearchCount">等待加载</span>
+                </div>
+                <div class="table-wrap compact">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Topic</th>
+                        <th>类型</th>
+                        <th>选择</th>
+                      </tr>
+                    </thead>
+                    <tbody id="topicRows"></tbody>
+                  </table>
+                </div>
+              </div>
+              <div class="topic-detail-stack">
+                <div class="subtab-bar" role="tablist" aria-label="Topic 功能">
+                  <button class="subtab active" type="button" data-subtab-group="topic" data-subtab-target="topic-mutation-panel" aria-selected="true">配置</button>
+                  <button class="subtab" type="button" data-subtab-group="topic" data-subtab-target="topic-send-panel" aria-selected="false">发送</button>
+                  <button class="subtab" type="button" data-subtab-group="topic" data-subtab-target="topic-messages-panel" aria-selected="false">消息</button>
+                  <button class="subtab" type="button" data-subtab-group="topic" data-subtab-target="topic-route-panel" aria-selected="false">路由</button>
+                  <button class="subtab" type="button" data-subtab-group="topic" data-subtab-target="topic-status-panel" aria-selected="false">水位</button>
+                </div>
+
+                <div class="route-panel topic-mutation-panel" id="topic-mutation-panel" data-subtab-panel="topic">
+                  <div class="result-head">
+                    <h3>Topic 写入</h3>
+                    <span id="topicMutationStatus">等待选择</span>
+                  </div>
+                  <form id="topicMutationForm" class="topic-mutation-form">
+                    <div class="topic-scope-switch" role="group" aria-label="写入目标">
+                      <button type="button" class="scope-chip active" data-topic-mutation-scope="cluster">集群</button>
+                      <button type="button" class="scope-chip" data-topic-mutation-scope="broker">Broker</button>
+                    </div>
+                    <div class="form-grid">
+                      <label class="topic-wide">
+                        <span>Topic</span>
+                        <input name="topic" autocomplete="off" />
+                      </label>
+                      <label>
+                        <span>Cluster</span>
+                        <select name="clusterName"></select>
+                      </label>
+                      <label>
+                        <span>Broker Addr</span>
+                        <select name="brokerAddr"></select>
+                      </label>
+                      <label>
+                        <span>Read Queue</span>
+                        <input name="readQueueNums" type="number" min="1" step="1" value="8" />
+                      </label>
+                      <label>
+                        <span>Write Queue</span>
+                        <input name="writeQueueNums" type="number" min="1" step="1" value="8" />
+                      </label>
+                      <label>
+                        <span>Perm</span>
+                        <select name="perm">
+                          <option value="6">6 / RW</option>
+                          <option value="4">4 / R</option>
+                          <option value="2">2 / W</option>
+                        </select>
+                      </label>
+                      <label class="topic-check">
+                        <span>Order</span>
+                        <input name="order" type="checkbox" />
+                      </label>
+                      <label class="topic-check">
+                        <span>Unit</span>
+                        <input name="unit" type="checkbox" />
+                      </label>
+                      <label class="topic-check">
+                        <span>Has Unit Sub</span>
+                        <input name="hasUnitSub" type="checkbox" />
+                      </label>
+                      <label class="topic-wide">
+                        <span>Attributes</span>
+                        <input name="attributes" autocomplete="off" placeholder="+message.type=NORMAL" />
+                      </label>
+                    </div>
+                    <div class="form-actions topic-mutation-actions">
+                      <button id="topicMutationSubmit" class="button button-primary" type="submit">创建 / 更新</button>
+                      <button id="topicDeleteButton" class="button button-secondary" type="button">删除</button>
+                      <p class="form-hint">写入后会重新读取 Topic 列表，并清理相关路由、水位和消息缓存。</p>
+                    </div>
+                  </form>
+                  <div id="topicMutationSummary" class="summary-grid topic-mutation-summary">
+                    <div>
+                      <span>Topic</span>
+                      <strong>-</strong>
+                    </div>
+                    <div>
+                      <span>写入目标</span>
+                      <strong>-</strong>
+                    </div>
+                    <div>
+                      <span>Cluster</span>
+                      <strong>-</strong>
+                    </div>
+                    <div>
+                      <span>Broker</span>
+                      <strong>-</strong>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="route-panel topic-message-send-panel" id="topic-send-panel" data-subtab-panel="topic" hidden>
+                  <div class="result-head">
+                    <h3>发送消息</h3>
+                    <span id="topicMessageSendStatus">等待选择</span>
+                  </div>
+                  <form id="topicMessageSendForm" class="topic-message-send-form">
+                    <div class="form-grid">
+                      <label class="topic-wide">
+                        <span>Topic</span>
+                        <input name="topic" autocomplete="off" />
+                      </label>
+                      <label class="topic-wide">
+                        <span>Body</span>
+                        <textarea name="body" rows="5" placeholder='{"hello":"rocketmq"}'></textarea>
+                      </label>
+                      <label>
+                        <span>Keys</span>
+                        <input name="keys" autocomplete="off" placeholder="业务 key，可选" />
+                      </label>
+                      <label>
+                        <span>Tags</span>
+                        <input name="tags" autocomplete="off" placeholder="TagA，可选" />
+                      </label>
+                      <label>
+                        <span>Broker Name</span>
+                        <select name="brokerName"></select>
+                      </label>
+                      <label>
+                        <span>Queue ID</span>
+                        <input name="queueId" type="number" min="0" step="1" placeholder="自动" />
+                      </label>
+                      <label class="topic-check topic-wide">
+                        <span>Trace Enable</span>
+                        <input name="traceEnable" type="checkbox" />
+                      </label>
+                    </div>
+                    <div class="form-actions topic-mutation-actions">
+                      <button id="topicMessageSendButton" class="button button-primary" type="submit">发送</button>
+                      <button id="topicMessageSendChainButton" class="button button-secondary" type="button" disabled>查看链路</button>
+                      <p class="form-hint">发送成功后会回显 messageId，并可直接带入消息链路查询。</p>
+                    </div>
+                  </form>
+                  <div id="topicMessageSendResult" class="summary-grid topic-message-send-result">
+                    <div>
+                      <span>Message ID</span>
+                      <strong>-</strong>
+                    </div>
+                    <div>
+                      <span>发送状态</span>
+                      <strong>-</strong>
+                    </div>
+                    <div>
+                      <span>Broker</span>
+                      <strong>-</strong>
+                    </div>
+                    <div>
+                      <span>队列</span>
+                      <strong>-</strong>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="route-panel" id="topic-route-panel" data-subtab-panel="topic" hidden>
+                  <div class="result-head">
+                    <h3>消息路由</h3>
+                    <div class="result-head-actions">
+                      <span id="topicRouteStatus">等待选择</span>
+                      <button id="topicRouteOpenDetail" class="route-action route-action-small" type="button">弹窗</button>
+                    </div>
+                  </div>
+                  <div id="topicRouteSummary" class="summary-grid">
+                    <div>
+                      <span>Topic</span>
+                      <strong>-</strong>
+                    </div>
+                    <div>
+                      <span>读 / 写队列</span>
+                      <strong>-</strong>
+                    </div>
+                  </div>
+                  <div class="table-wrap route-table card-table">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Broker</th>
+                          <th>集群</th>
+                          <th>地址</th>
+                          <th>Read</th>
+                          <th>Write</th>
+                          <th>权限</th>
+                        </tr>
+                      </thead>
+                      <tbody id="topicRouteRows">
+                        <tr><td colspan="6">选择一个 Topic 查看路由。</td></tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                <div class="route-panel" id="topic-status-panel" data-subtab-panel="topic" hidden>
+                  <div class="result-head">
+                    <h3>队列水位</h3>
+                    <div class="result-head-actions">
+                      <span id="topicQueueStatus">等待选择</span>
+                      <button id="topicStatusOpenDetail" class="route-action route-action-small" type="button">弹窗</button>
+                    </div>
+                  </div>
+                  <div id="topicQueueSummary" class="summary-grid">
+                    <div>
+                      <span>Topic</span>
+                      <strong>-</strong>
+                    </div>
+                    <div>
+                      <span>队列 / 消息数</span>
+                      <strong>-</strong>
+                    </div>
+                  </div>
+                  <div class="table-wrap route-table topic-status-table card-table">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Broker</th>
+                          <th>QID</th>
+                          <th>最小位点</th>
+                          <th>最大位点</th>
+                          <th>消息数</th>
+                          <th>最后写入时间</th>
+                        </tr>
+                      </thead>
+                      <tbody id="topicQueueRows">
+                        <tr><td colspan="6">选择一个 Topic 查看队列水位。</td></tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                <div class="route-panel message-browser-panel" id="topic-messages-panel" data-subtab-panel="topic" hidden>
+                  <div class="result-head">
+                    <h3>Topic 消息</h3>
+                    <div class="result-head-actions">
+                      <span id="topicMessagesStatus">等待选择</span>
+                      <button id="topicMessagesOpenDetail" class="route-action route-action-small" type="button">弹窗</button>
+                    </div>
+                  </div>
+                  <div id="topicMessagesSummary" class="summary-grid">
+                    <div>
+                      <span>Topic</span>
+                      <strong>-</strong>
+                    </div>
+                    <div>
+                      <span>消息 / 位点</span>
+                      <strong>-</strong>
+                    </div>
+                    <div>
+                      <span>Limit</span>
+                      <strong>-</strong>
+                    </div>
+                    <div>
+                      <span>新拉 / 复用</span>
+                      <strong>-</strong>
+                    </div>
+                    <div>
+                      <span>Warnings</span>
+                      <strong>-</strong>
+                    </div>
+                  </div>
+                  <div class="message-browser-toolbar">
+                    <label>
+                      <span>Limit</span>
+                      <input id="topicMessageLimit" type="number" min="1" max="24" value="12" />
+                    </label>
+                    <button id="topicMessagesRefresh" class="route-action" type="button">刷新消息</button>
+                  </div>
+                  <p class="message-retention-note">历史消息取决于 Broker 保留窗口；链路 Trace 还取决于 trace 数据是否开启并保留。</p>
+                  <div class="table-wrap route-table topic-messages-table card-table">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Message ID</th>
+                          <th>Keys</th>
+                          <th>Broker</th>
+                          <th>队列</th>
+                          <th>Offset</th>
+                          <th>存储时间</th>
+                          <th>Body</th>
+                          <th>链路</th>
+                        </tr>
+                      </thead>
+                      <tbody id="topicMessageRows">
+                        <tr><td colspan="8">选择一个 Topic 浏览消息。</td></tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            </div>
+        </section>
+
+        <section class="panel page-view" id="consumers" data-page="consumers" hidden>
+            <div class="panel-head">
+              <div>
+                <h2>Consumer</h2>
+                <p>显示在线状态、消费模式、协议版本、堆积量，并可展开连接、订阅和队列进度。</p>
+              </div>
+              <div class="panel-meta">
+                <span id="consumerStatus">等待刷新</span>
+                <div class="status-pills" id="consumerMetaPills"></div>
+              </div>
+            </div>
+            <div class="consumer-layout">
+              <div class="consumer-list-panel">
+                <div class="consumer-searchbar">
+                  <label for="consumerSearchInput">
+                    <span>搜索 Consumer</span>
+                    <input id="consumerSearchInput" type="search" autocomplete="off" placeholder="消费者组 / 状态 / 版本 / 模式" />
+                  </label>
+                  <button id="consumerSearchClear" class="route-action" type="button">清空</button>
+                  <span id="consumerSearchCount">等待加载</span>
+                </div>
+                <div class="table-wrap compact">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>消费者组</th>
+                        <th>在线</th>
+                        <th>版本</th>
+                        <th>模式</th>
+                        <th>堆积</th>
+                        <th>详情</th>
+                      </tr>
+                    </thead>
+                    <tbody id="consumerRows"></tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div class="consumer-detail-panel">
+                <div class="result-head">
+                  <h3>消费者详情</h3>
+                  <span id="consumerDetailStatus">等待选择</span>
+                </div>
+
+                <div class="subtab-bar" role="tablist" aria-label="Consumer 详情功能">
+                  <button class="subtab active" type="button" data-subtab-group="consumer" data-subtab-target="consumer-summary-panel" aria-selected="true">概览</button>
+                  <button class="subtab" type="button" data-subtab-group="consumer" data-subtab-target="consumer-reset-panel" aria-selected="false">重置</button>
+                  <button class="subtab" type="button" data-subtab-group="consumer" data-subtab-target="consumer-connections-panel" aria-selected="false">连接</button>
+                  <button class="subtab" type="button" data-subtab-group="consumer" data-subtab-target="consumer-subscriptions-panel" aria-selected="false">订阅</button>
+                  <button class="subtab" type="button" data-subtab-group="consumer" data-subtab-target="consumer-progress-panel" aria-selected="false">进度</button>
+                </div>
+
+                <section class="detail-section" id="consumer-summary-panel" data-subtab-panel="consumer">
+                  <div class="detail-section-head">
+                    <h4>概览</h4>
+                    <span>消费者组、订阅 Topic 与堆积摘要</span>
+                  </div>
+                  <div id="consumerDetailSummary" class="summary-grid">
+                    <div>
+                      <span>消费者组</span>
+                      <strong>-</strong>
+                    </div>
+                    <div>
+                      <span>Topic</span>
+                      <strong>-</strong>
+                    </div>
+                    <div>
+                      <span>堆积 / 处理中</span>
+                      <strong>-</strong>
+                    </div>
+                    <div>
+                      <span>Consume TPS</span>
+                      <strong>-</strong>
+                    </div>
+                  </div>
+                </section>
+
+                <section class="detail-section consumer-offset-reset-panel" id="consumer-reset-panel" data-subtab-panel="consumer" hidden>
+                  <div class="detail-section-head">
+                    <h4>重置消费点</h4>
+                    <span id="consumerOffsetResetStatus">等待选择</span>
+                  </div>
+                  <form id="consumerOffsetResetForm" class="consumer-offset-reset-form">
+                    <div class="form-grid">
+                      <label>
+                        <span>Consumer Group</span>
+                        <input name="group" autocomplete="off" />
+                      </label>
+                      <label>
+                        <span>Topic</span>
+                        <input name="topic" autocomplete="off" />
+                      </label>
+                      <label>
+                        <span>Timestamp</span>
+                        <input name="timestamp" autocomplete="off" value="now" />
+                      </label>
+                      <label class="topic-check">
+                        <span>Force</span>
+                        <input name="force" type="checkbox" checked />
+                      </label>
+                      <label>
+                        <span>Broker Addr</span>
+                        <input name="brokerAddr" autocomplete="off" placeholder="单队列可选" />
+                      </label>
+                      <label>
+                        <span>Queue ID</span>
+                        <input name="queueId" type="number" min="0" step="1" placeholder="单队列可选" />
+                      </label>
+                      <label>
+                        <span>Offset</span>
+                        <input name="offset" type="number" min="0" step="1" placeholder="可选" />
+                      </label>
+                    </div>
+                    <div class="form-actions topic-mutation-actions">
+                      <button id="consumerOffsetResetButton" class="button button-primary" type="submit">重置消费点</button>
+                      <p class="form-hint">默认按 group/topic 重置；填写 Broker Addr + Queue ID 时只重置单个队列。</p>
+                    </div>
+                  </form>
+                  <div id="consumerOffsetResetResult" class="summary-grid consumer-offset-reset-result">
+                    <div>
+                      <span>目标</span>
+                      <strong>-</strong>
+                    </div>
+                    <div>
+                      <span>时间</span>
+                      <strong>-</strong>
+                    </div>
+                    <div>
+                      <span>操作</span>
+                      <strong>-</strong>
+                    </div>
+                    <div>
+                      <span>输出</span>
+                      <strong>-</strong>
+                    </div>
+                  </div>
+                </section>
+
+                <section class="detail-section" id="consumer-connections-panel" data-subtab-panel="consumer" hidden>
+                  <div class="detail-section-head">
+                    <h4>连接</h4>
+                    <div class="detail-section-actions">
+                      <span>客户端地址、语言和版本</span>
+                      <button id="consumerConnectionsOpenDetail" class="route-action route-action-small" type="button">弹窗</button>
+                    </div>
+                  </div>
+                  <div class="table-wrap consumer-detail-table card-table">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Client ID</th>
+                          <th>客户端地址</th>
+                          <th>语言</th>
+                          <th>版本</th>
+                        </tr>
+                      </thead>
+                      <tbody id="consumerConnectionRows">
+                        <tr><td colspan="4">选择一个消费者组查看连接。</td></tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </section>
+
+                <section class="detail-section" id="consumer-subscriptions-panel" data-subtab-panel="consumer" hidden>
+                  <div class="detail-section-head">
+                    <h4>订阅</h4>
+                    <div class="detail-section-actions">
+                      <span>Topic 与过滤表达式</span>
+                      <button id="consumerSubscriptionsOpenDetail" class="route-action route-action-small" type="button">弹窗</button>
+                    </div>
+                  </div>
+                  <div class="table-wrap consumer-detail-table card-table">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Topic</th>
+                          <th>SubExpression</th>
+                        </tr>
+                      </thead>
+                      <tbody id="consumerSubscriptionRows">
+                        <tr><td colspan="2">选择一个消费者组查看订阅。</td></tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </section>
+
+                <section class="detail-section" id="consumer-progress-panel" data-subtab-panel="consumer" hidden>
+                  <div class="detail-section-head">
+                    <h4>消费进度</h4>
+                    <div class="detail-section-actions">
+                      <span>队列位点、堆积和最后消费时间</span>
+                      <button id="consumerProgressOpenDetail" class="route-action route-action-small" type="button">弹窗</button>
+                    </div>
+                  </div>
+                  <div class="table-wrap consumer-detail-table progress-table card-table">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Topic</th>
+                          <th>Broker</th>
+                          <th>队列</th>
+                          <th>Broker 位点</th>
+                          <th>消费位点</th>
+                          <th>客户端 IP</th>
+                          <th>堆积</th>
+                          <th>处理中</th>
+                          <th>最后时间</th>
+                        </tr>
+                      </thead>
+                      <tbody id="consumerProgressRows">
+                        <tr><td colspan="9">选择一个消费者组查看消费进度。</td></tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </section>
+              </div>
+            </div>
+        </section>
+
+        <section class="panel chain-panel page-view" id="messages" data-page="messages" hidden>
+          <div class="panel-head">
+            <div>
+              <h2>单条消息链路</h2>
+              <p>从 Topic 消息行自动带入 messageId；历史链路取决于 Broker 和 Trace 保留窗口。</p>
+            </div>
+            <div class="panel-meta">
+              <span id="chainStatus">等待查询</span>
+              <div class="status-pills" id="chainMetaPills"></div>
+            </div>
+          </div>
+
+          <div class="chain-layout">
+            <form id="chainForm" class="chain-form">
+              <div class="chain-form-head">
+                <div class="chain-form-title">
+                  <span>Query</span>
+                  <h3>查询条件</h3>
+                </div>
+                <div id="chainSource" class="chain-source">等待从消息列表选择，或使用高级查询。</div>
+              </div>
+              <div class="form-grid chain-query-grid chain-primary-grid">
+                <label class="chain-field chain-field-wide">
+                  <span>Topic</span>
+                  <input name="topic" value="sample_notice_topic" autocomplete="off" />
+                </label>
+                <label class="chain-field chain-field-wide">
+                  <span>Message ID</span>
+                  <input name="messageId" placeholder="输入 msgId 或 offsetMsgId" autocomplete="off" />
+                </label>
+                <label class="chain-field chain-field-wide">
+                  <span>Key</span>
+                  <input name="key" placeholder="按业务 key 查询" autocomplete="off" />
+                </label>
+              </div>
+              <details class="chain-advanced">
+                <summary>
+                  <span>高级条件</span>
+                  <small>消费组、Trace Topic、时间窗口</small>
+                </summary>
+                <div class="form-grid chain-query-grid chain-advanced-grid">
+                  <label class="chain-field">
+                    <span>Consumer Group</span>
+                    <input name="consumerGroup" placeholder="可选，查看消费堆积" autocomplete="off" />
+                  </label>
+                  <label class="chain-field">
+                    <span>Trace Topic</span>
+                    <input name="traceTopic" placeholder="可选，默认由 mqadmin 处理" autocomplete="off" />
+                  </label>
+                  <label class="chain-field chain-field-short">
+                    <span>Max Num</span>
+                    <input name="maxNum" type="number" min="1" step="1" placeholder="32" />
+                  </label>
+                  <label class="chain-field">
+                    <span>Begin Timestamp</span>
+                    <input name="beginTimestamp" type="number" min="0" step="1" placeholder="毫秒时间戳" />
+                  </label>
+                  <label class="chain-field">
+                    <span>End Timestamp</span>
+                    <input name="endTimestamp" type="number" min="0" step="1" placeholder="毫秒时间戳" />
+                  </label>
+                </div>
+              </details>
+              <div class="form-actions chain-form-actions">
+                <p class="form-hint">没有填 messageId 时会先按 key 搜索候选，再回查完整消息。</p>
+                <button type="submit" class="button button-primary" id="chainButton">
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M8 12h8M12 8l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+                    <path d="M4 5h9l7 7-7 7H4l7-7z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" opacity=".35" />
+                  </svg>
+                  <span>查询链路</span>
+                </button>
+              </div>
+            </form>
+
+            <div class="chain-results">
+              <div class="result-block">
+              <div class="result-head">
+                <h3>消息摘要</h3>
+                  <span id="chainSummaryStatus">等待查询</span>
+                </div>
+                <div id="messageSummary" class="message-summary empty-state">
+                  输入消息 ID 或 Key 后，这里会显示 Broker 存储信息、Trace 结果和消费状态。
+                </div>
+              </div>
+
+              <div class="result-block">
+                <div class="result-head">
+                  <h3>候选消息</h3>
+                  <span id="candidateHint">0 条</span>
+                </div>
+                <div id="candidateList" class="candidate-list empty-state">暂无候选消息。</div>
+              </div>
+
+              <div class="result-block result-block-wide">
+                <div class="result-head">
+                  <h3>状态链路</h3>
+                  <span id="timelineHint">等待查询</span>
+                </div>
+                <div id="timeline" class="timeline empty-state">
+                  输入消息 ID 或 Key 后查看发送、存储、消费与重试轨迹。
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <dialog id="nameServerDialog" class="nameserver-dialog" aria-labelledby="nameServerDialogTitle">
+      <form id="nameServerForm" class="nameserver-dialog-form">
+        <div class="nameserver-dialog-head">
+          <div>
+            <span class="sidebar-label">Cluster Endpoint</span>
+            <h2 id="nameServerDialogTitle">添加 NameServer</h2>
+          </div>
+          <button id="nameServerDialogClose" class="dialog-close" type="button">关闭</button>
+        </div>
+        <label class="nameserver-field">
+          <span>NameServer</span>
+          <input id="nameServerInput" name="nameServer" autocomplete="off" placeholder="host:9876" />
+        </label>
+        <div class="nameserver-choice-head">
+          <span>已添加</span>
+          <strong id="nameServerChoiceCount">0</strong>
+        </div>
+        <div id="nameServerChoiceList" class="nameserver-choice-list">
+          <button type="button" class="nameserver-choice empty-choice">暂无已添加 NameServer</button>
+        </div>
+        <div class="nameserver-dialog-actions">
+          <span id="nameServerDialogStatus" class="dialog-status">等待输入</span>
+          <button id="nameServerDialogCancel" class="button button-secondary" type="button">取消</button>
+          <button id="nameServerButton" class="button button-primary" type="submit">切换</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="detailDialog" class="detail-dialog" aria-labelledby="detailDialogTitle">
+      <div class="detail-dialog-shell">
+        <div class="detail-dialog-head">
+          <div>
+            <span id="detailDialogMeta" class="sidebar-label">Detail</span>
+            <h2 id="detailDialogTitle">详情</h2>
+          </div>
+          <button id="detailDialogClose" class="dialog-close" type="button">关闭</button>
+        </div>
+        <div id="detailDialogBody" class="detail-dialog-body"></div>
+      </div>
+    </dialog>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

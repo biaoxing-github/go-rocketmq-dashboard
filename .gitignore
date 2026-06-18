@@ -1,0 +1,17 @@
+.codegraph/
+.codex/
+.playwright-mcp/
+.tmp/
+1780756104205/
+
+AGENTS.md
+.impeccable.md
+verification.md
+
+*.exe
+*.log
+*.png
+
+docs/*.jsonl
+docs/goadmin_development_plan.md
+docs/goadmin_performance_comparison.md

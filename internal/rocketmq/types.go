@@ -1,0 +1,264 @@
+package rocketmq
+
+// Cluster 表示 RocketMQ 集群，聚合同一集群下的 Broker 节点。
+type Cluster struct {
+	Name    string   `json:"name"`
+	Brokers []Broker `json:"brokers"`
+}
+
+// Broker 表示 RocketMQ Broker 的运行状态，字段来自 mqadmin clusterList 输出。
+type Broker struct {
+	Cluster   string `json:"cluster"`
+	Name      string `json:"name"`
+	ID        string `json:"id"`
+	Address   string `json:"address"`
+	Version   string `json:"version"`
+	InTPS     string `json:"inTps"`
+	OutTPS    string `json:"outTps"`
+	Activated bool   `json:"activated"`
+}
+
+// BrokerStatus 表示 Broker 运行时指标，来自 mqadmin brokerStatus 的 key/value 输出。
+type BrokerStatus struct {
+	// BrokerAddr 是当前 Broker 的直连地址，页面用它区分不同 Broker 的状态快照。
+	BrokerAddr string `json:"brokerAddr"`
+	// BrokerVersionDesc 是 brokerStatus 输出里的版本描述，通常用于排查版本差异。
+	BrokerVersionDesc string `json:"brokerVersionDesc"`
+	// BrokerRole 表示 Broker 当前角色，例如 MASTER、SLAVE 或 ASYNC_MASTER。
+	BrokerRole string `json:"brokerRole"`
+	// BootTimestamp 是 Broker 启动时间，便于判断重启和漂移。
+	BootTimestamp string `json:"bootTimestamp"`
+	// PutTps 表示写入 TPS 的原始输出。
+	PutTps string `json:"putTps"`
+	// GetFoundTps 表示命中读取 TPS 的原始输出。
+	GetFoundTps string `json:"getFoundTps"`
+	// GetTotalTps 表示读取总 TPS 的原始输出。
+	GetTotalTps string `json:"getTotalTps"`
+	// CommitLogCapacity 表示 commitlog 磁盘容量或剩余容量描述。
+	CommitLogCapacity string `json:"commitLogCapacity"`
+	// DispatchBehind 表示消息分发积压字节数或相关描述。
+	DispatchBehind string `json:"dispatchBehind"`
+	// RuntimeDescription 是前端用于展示的摘要文案。
+	RuntimeDescription string `json:"runtimeDescription"`
+	// Metrics 保留 brokerStatus 的完整指标列表，便于前端和后续排障继续扩展。
+	Metrics []BrokerRuntimeMetric `json:"metrics"`
+}
+
+// BrokerRuntimeMetric 表示 brokerStatus 输出中的一行运行时指标。
+type BrokerRuntimeMetric struct {
+	// Key 是 brokerStatus 输出的指标名称。
+	Key string `json:"key"`
+	// Value 是对应指标的原始值。
+	Value string `json:"value"`
+}
+
+// Topic 表示 RocketMQ Topic 列表项，Kind 用于前端区分普通、重试、死信和系统 Topic。
+type Topic struct {
+	Name string `json:"name"`
+	Kind string `json:"kind"`
+}
+
+// TopicStatus 表示一个 Topic 当前每个队列的位点状态，来自 mqadmin topicStatus 输出。
+type TopicStatus struct {
+	Topic             string           `json:"topic"`
+	TotalQueues       int              `json:"totalQueues"`
+	TotalMessageCount int64            `json:"totalMessageCount"`
+	MinOffsetTotal    int64            `json:"minOffsetTotal"`
+	MaxOffsetTotal    int64            `json:"maxOffsetTotal"`
+	Rows              []TopicStatusRow `json:"rows"`
+}
+
+// TopicStatusRow 表示 Topic 在某个 Broker 队列上的最小位点、最大位点和最后写入时间。
+type TopicStatusRow struct {
+	BrokerName   string `json:"brokerName"`
+	QueueID      int    `json:"queueId"`
+	MinOffset    int64  `json:"minOffset"`
+	MaxOffset    int64  `json:"maxOffset"`
+	MessageCount int64  `json:"messageCount"`
+	LastUpdated  string `json:"lastUpdated"`
+}
+
+// TopicRoute 表示一个 Topic 在 Broker 上的路由分布，来自 mqadmin topicRoute JSON 输出。
+type TopicRoute struct {
+	Topic            string             `json:"topic"`
+	TotalReadQueues  int                `json:"totalReadQueues"`
+	TotalWriteQueues int                `json:"totalWriteQueues"`
+	Queues           []TopicQueueRoute  `json:"queues"`
+	Brokers          []TopicBrokerRoute `json:"brokers"`
+}
+
+// TopicQueueRoute 表示某个 Broker 对指定 Topic 承载的读写队列数量和权限位。
+type TopicQueueRoute struct {
+	BrokerName      string `json:"brokerName"`
+	ReadQueueNums   int    `json:"readQueueNums"`
+	WriteQueueNums  int    `json:"writeQueueNums"`
+	Perm            int    `json:"perm"`
+	PermissionLabel string `json:"permissionLabel"`
+	TopicSysFlag    int    `json:"topicSysFlag"`
+}
+
+// TopicBrokerRoute 表示 Topic 路由里的 Broker 地址表，Addrs 保留 brokerId 到地址的映射。
+type TopicBrokerRoute struct {
+	Cluster    string            `json:"cluster"`
+	BrokerName string            `json:"brokerName"`
+	Addrs      map[string]string `json:"addrs"`
+}
+
+// ConsumerGroup 表示消费者组的在线状态、协议版本和堆积量。
+type ConsumerGroup struct {
+	Name      string `json:"name"`
+	Count     int64  `json:"count"`
+	Version   string `json:"version"`
+	Type      string `json:"type"`
+	Model     string `json:"model"`
+	TPS       string `json:"tps"`
+	DiffTotal int64  `json:"diffTotal"`
+	Online    bool   `json:"online"`
+}
+
+// ConsumerDetail 表示 Consumer 页点击某个消费者组后展示的连接、订阅和队列进度详情。
+type ConsumerDetail struct {
+	Group            string                 `json:"group"`
+	Topic            string                 `json:"topic"`
+	ConsumeType      string                 `json:"consumeType"`
+	MessageModel     string                 `json:"messageModel"`
+	ConsumeFromWhere string                 `json:"consumeFromWhere"`
+	Connections      []ConsumerConnection   `json:"connections"`
+	Subscriptions    []ConsumerSubscription `json:"subscriptions"`
+	ProgressRows     []ConsumerProgressRow  `json:"progressRows"`
+	ConsumeTPS       float64                `json:"consumeTps"`
+	DiffTotal        int64                  `json:"diffTotal"`
+	InflightTotal    int64                  `json:"inflightTotal"`
+	ConnectionError  string                 `json:"connectionError,omitempty"`
+	ProgressError    string                 `json:"progressError,omitempty"`
+}
+
+// ConsumerConnection 表示消费者组内一个在线客户端连接。
+type ConsumerConnection struct {
+	ClientID   string `json:"clientId"`
+	ClientAddr string `json:"clientAddr"`
+	Language   string `json:"language"`
+	Version    string `json:"version"`
+}
+
+// ConsumerSubscription 表示消费者组订阅的 Topic 和 tag/filter 表达式。
+type ConsumerSubscription struct {
+	Topic      string `json:"topic"`
+	Expression string `json:"expression"`
+}
+
+// ConsumerProgressRow 表示消费者组在一个队列上的 broker/consumer 位点和堆积量。
+type ConsumerProgressRow struct {
+	Topic          string `json:"topic"`
+	BrokerName     string `json:"brokerName"`
+	QueueID        int    `json:"queueId"`
+	BrokerOffset   int64  `json:"brokerOffset"`
+	ConsumerOffset int64  `json:"consumerOffset"`
+	ClientIP       string `json:"clientIp"`
+	Diff           int64  `json:"diff"`
+	Inflight       int64  `json:"inflight"`
+	LastTime       string `json:"lastTime"`
+}
+
+// ConsumerConnectionSnapshot 是 consumerConnection 命令解析出的连接和订阅摘要。
+type ConsumerConnectionSnapshot struct {
+	Connections      []ConsumerConnection   `json:"connections"`
+	Subscriptions    []ConsumerSubscription `json:"subscriptions"`
+	ConsumeType      string                 `json:"consumeType"`
+	MessageModel     string                 `json:"messageModel"`
+	ConsumeFromWhere string                 `json:"consumeFromWhere"`
+}
+
+// ConsumerProgressDetail 是 consumerProgress -g 明细命令解析出的队列位点和汇总指标。
+type ConsumerProgressDetail struct {
+	Rows          []ConsumerProgressRow `json:"rows"`
+	ConsumeTPS    float64               `json:"consumeTps"`
+	DiffTotal     int64                 `json:"diffTotal"`
+	InflightTotal int64                 `json:"inflightTotal"`
+}
+
+// MessageDetail 表示单条消息的基础元数据，后续由查询消息和轨迹查询共同填充。
+type MessageDetail struct {
+	MessageID string `json:"messageId"`
+	Topic     string `json:"topic"`
+	// BrokerName 是按队列位点浏览消息时的来源 Broker 名称，messageId 回查无法提供时保持为空。
+	BrokerName string   `json:"brokerName"`
+	Keys       []string `json:"keys"`
+	// TraceMessageID 是 RocketMQ 消息属性里的 UNIQ_KEY，queryMsgTraceById 需要用它而不是 Broker OffsetID 查询 Trace。
+	TraceMessageID string `json:"traceMessageId,omitempty"`
+	// TraceParent 是业务消息透传的 W3C traceparent，便于把 MQ 链路和应用链路排障关联起来。
+	TraceParent    string `json:"traceParent,omitempty"`
+	StoreTimestamp int64  `json:"storeTimestamp"`
+	QueueID        int    `json:"queueId"`
+	QueueOffset    int64  `json:"queueOffset"`
+	ReconsumeTimes int    `json:"reconsumeTimes"`
+	BornHost       string `json:"bornHost"`
+	StoreHost      string `json:"storeHost"`
+	BodyPreview    string `json:"bodyPreview"`
+}
+
+// MessageSearchResult 表示按 key 查询到的候选消息位置，详情页会继续按 messageId 回查完整消息。
+type MessageSearchResult struct {
+	MessageID   string `json:"messageId"`
+	QueueID     int    `json:"queueId"`
+	QueueOffset int64  `json:"queueOffset"`
+}
+
+// TopicMessages 表示某个 Topic 在保留窗口内可回查到的消息列表。
+type TopicMessages struct {
+	// Topic 是当前消息浏览的 Topic 名称。
+	Topic string `json:"topic"`
+	// BrokerName 是用户指定的 Broker 名称，未指定时表示跨队列聚合浏览。
+	BrokerName string `json:"brokerName"`
+	// QueueID 是用户指定的队列 ID，-1 表示跨队列聚合浏览。
+	QueueID int `json:"queueId"`
+	// Limit 是本次最多返回的消息数量。
+	Limit int `json:"limit"`
+	// ScannedOffsets 是本次实际尝试回查的队列位点数量。
+	ScannedOffsets int `json:"scannedOffsets"`
+	// FetchedOffsets 是本次真实调用 mqadmin queryMsgByOffset 的位点数量。
+	FetchedOffsets int `json:"fetchedOffsets"`
+	// ReusedOffsets 是本次从上一轮快照复用的位点数量。
+	ReusedOffsets int `json:"reusedOffsets"`
+	// Rows 是可用于点击查看链路的消息明细。
+	Rows []MessageDetail `json:"rows"`
+	// Warnings 记录部分队列或位点无法回查时的摘要，避免少量失败吞掉已拿到的消息。
+	Warnings []string `json:"warnings"`
+}
+
+// TraceEvent 表示消息生命周期中的发送、投递或消费轨迹事件。
+type TraceEvent struct {
+	Stage     string `json:"stage"`
+	Group     string `json:"group"`
+	Timestamp int64  `json:"timestamp"`
+	Detail    string `json:"detail"`
+}
+
+// ConsumerState 表示消费者组在指定 Topic 上对消息的消费状态判断。
+type ConsumerState struct {
+	Group  string `json:"group"`
+	Topic  string `json:"topic"`
+	Status string `json:"status"`
+	Lag    int64  `json:"lag"`
+}
+
+// MessageStatusStep 是前端链路时间线中的一个节点。
+type MessageStatusStep struct {
+	Stage     string `json:"stage"`
+	Label     string `json:"label"`
+	Group     string `json:"group,omitempty"`
+	Timestamp int64  `json:"timestamp"`
+	Detail    string `json:"detail"`
+	Health    string `json:"health"`
+}
+
+// MessageStatusChain 汇总单条消息从入库到消费完成的可视化状态链路。
+type MessageStatusChain struct {
+	MessageID     string                `json:"messageId"`
+	Topic         string                `json:"topic"`
+	Keys          []string              `json:"keys"`
+	Detail        MessageDetail         `json:"detail"`
+	Candidates    []MessageSearchResult `json:"candidates"`
+	OverallStatus string                `json:"overallStatus"`
+	Steps         []MessageStatusStep   `json:"steps"`
+}

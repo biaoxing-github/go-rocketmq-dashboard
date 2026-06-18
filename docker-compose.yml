@@ -1,0 +1,36 @@
+services:
+  rocketmq-dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        GO_VERSION: ${GO_VERSION:-1.25}
+        ROCKETMQ_VERSION: ${RMQD_ROCKETMQ_VERSION:-5.3.2}
+        ROCKETMQ_DOWNLOAD_BASE: ${ROCKETMQ_DOWNLOAD_BASE:-https://mirrors.huaweicloud.com/apache/rocketmq}
+        ROCKETMQ_CHECKSUM_BASE: ${ROCKETMQ_CHECKSUM_BASE:-https://downloads.apache.org/rocketmq}
+        APT_MIRROR: ${APT_MIRROR:-https://repo.huaweicloud.com/ubuntu/}
+        GO_IMAGE: ${GO_IMAGE:-golang:1.25-bookworm}
+        JAVA_IMAGE: ${JAVA_IMAGE:-eclipse-temurin:17-jdk-jammy}
+    image: rocketmq-go-dashboard:${IMAGE_TAG:-local}
+    container_name: rocketmq-go-dashboard
+    restart: unless-stopped
+    ports:
+      - "${RMQD_HTTP_PORT:-18090}:18090"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      RMQD_ADDR: ":18090"
+      RMQD_NAMESRV: "${RMQD_NAMESRV:-host.docker.internal:9876}"
+      RMQD_NAMESRV_OPTIONS: "${RMQD_NAMESRV_OPTIONS:-host.docker.internal:9876}"
+      RMQD_JAVA: "java"
+      RMQD_MQADMIN_CLASSPATH: "/opt/rocketmq/lib/*"
+      RMQD_ROCKETMQ_VERSION: "${RMQD_ROCKETMQ_VERSION:-5.3.2}"
+      RMQD_REQUEST_TIMEOUT_MS: "${RMQD_REQUEST_TIMEOUT_MS:-60000}"
+      RMQD_CLUSTER_CACHE_TTL_MS: "${RMQD_CLUSTER_CACHE_TTL_MS:-30000}"
+      RMQD_MESSAGE_CHAIN_CACHE_TTL_MS: "${RMQD_MESSAGE_CHAIN_CACHE_TTL_MS:-1800000}"
+      RMQD_COMMAND_MAX_LATENCY_MS: "${RMQD_COMMAND_MAX_LATENCY_MS:-1000}"
+      RMQD_ADMIN_SIDECAR_ENABLED: "${RMQD_ADMIN_SIDECAR_ENABLED:-true}"
+      RMQD_ADMIN_SIDECAR_ADDR: "${RMQD_ADMIN_SIDECAR_ADDR:-127.0.0.1:18091}"
+      RMQD_ADMIN_SIDECAR_CLASSPATH: "${RMQD_ADMIN_SIDECAR_CLASSPATH:-/app/rocketmq-admin-sidecar:/opt/rocketmq/lib/*}"
+      RMQD_ADMIN_SIDECAR_MAIN_CLASS: "${RMQD_ADMIN_SIDECAR_MAIN_CLASS:-dev.codex.rocketmq.AdminSidecar}"
+      RMQD_ADMIN_SIDECAR_TIMEOUT_MS: "${RMQD_ADMIN_SIDECAR_TIMEOUT_MS:-3000}"
