@@ -1,0 +1,74 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1040" height="760" viewBox="0 0 1040 760" role="img" aria-labelledby="title desc">
+  <title id="title">Top goadmin native speedups versus official mqadmin</title>
+  <desc id="desc">Top command scenarios by Go native speedup ratio compared with official mqadmin process startup path.</desc>
+  <rect width="1040" height="760" fill="#ffffff"/>
+  <text x="32" y="42" font-family="Segoe UI, Arial, sans-serif" font-size="24" font-weight="700" fill="#111827">Top Go native speedups</text>
+  <text x="32" y="70" font-family="Segoe UI, Arial, sans-serif" font-size="14" fill="#4b5563">Speedup = official mqadmin average latency / goadmin native average latency. Higher is better.</text>
+  <line x1="360" y1="96" x2="360" y2="690" stroke="#e5e7eb"/>
+  <text x="348" y="718" font-family="Segoe UI, Arial, sans-serif" font-size="11" fill="#6b7280">0x</text>
+  <line x1="472" y1="96" x2="472" y2="690" stroke="#e5e7eb"/>
+  <text x="460" y="718" font-family="Segoe UI, Arial, sans-serif" font-size="11" fill="#6b7280">609x</text>
+  <line x1="584" y1="96" x2="584" y2="690" stroke="#e5e7eb"/>
+  <text x="572" y="718" font-family="Segoe UI, Arial, sans-serif" font-size="11" fill="#6b7280">1219x</text>
+  <line x1="696" y1="96" x2="696" y2="690" stroke="#e5e7eb"/>
+  <text x="684" y="718" font-family="Segoe UI, Arial, sans-serif" font-size="11" fill="#6b7280">1828x</text>
+  <line x1="808" y1="96" x2="808" y2="690" stroke="#e5e7eb"/>
+  <text x="796" y="718" font-family="Segoe UI, Arial, sans-serif" font-size="11" fill="#6b7280">2437x</text>
+  <line x1="920" y1="96" x2="920" y2="690" stroke="#e5e7eb"/>
+  <text x="908" y="718" font-family="Segoe UI, Arial, sans-serif" font-size="11" fill="#6b7280">3047x</text>
+  <rect x="24" y="94" width="980" height="40" fill="#f8fafc"/>
+  <text x="32" y="112" font-family="Segoe UI, Arial, sans-serif" font-size="13" font-weight="600" fill="#111827">removeBroker</text>
+  <text x="32" y="129" font-family="Segoe UI, Arial, sans-serif" font-size="11" fill="#6b7280">official 9140ms / native 3ms</text>
+  <rect x="360" y="99" width="560" height="18" rx="4" fill="#14b8a6"/>
+  <text x="928" y="113" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="700" fill="#0f766e">3047x</text>
+  <text x="32" y="160" font-family="Segoe UI, Arial, sans-serif" font-size="13" font-weight="600" fill="#111827">updateGlobalWhiteAddr</text>
+  <text x="32" y="177" font-family="Segoe UI, Arial, sans-serif" font-size="11" fill="#6b7280">official 11006ms / native 7.4ms</text>
+  <rect x="360" y="147" width="273.4" height="18" rx="4" fill="#14b8a6"/>
+  <text x="641.4" y="161" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="700" fill="#0f766e">1487x</text>
+  <rect x="24" y="190" width="980" height="40" fill="#f8fafc"/>
+  <text x="32" y="208" font-family="Segoe UI, Arial, sans-serif" font-size="13" font-weight="600" fill="#111827">deleteAclConfig</text>
+  <text x="32" y="225" font-family="Segoe UI, Arial, sans-serif" font-size="11" fill="#6b7280">official 12095ms / native 8.4ms</text>
+  <rect x="360" y="195" width="264.7" height="18" rx="4" fill="#14b8a6"/>
+  <text x="632.7" y="209" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="700" fill="#0f766e">1440x</text>
+  <text x="32" y="256" font-family="Segoe UI, Arial, sans-serif" font-size="13" font-weight="600" fill="#111827">clusterAclConfigVersion</text>
+  <text x="32" y="273" font-family="Segoe UI, Arial, sans-serif" font-size="11" fill="#6b7280">official 3722ms / native 2.8ms</text>
+  <rect x="360" y="243" width="244.3" height="18" rx="4" fill="#14b8a6"/>
+  <text x="612.3" y="257" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="700" fill="#0f766e">1329x</text>
+  <rect x="24" y="286" width="980" height="40" fill="#f8fafc"/>
+  <text x="32" y="304" font-family="Segoe UI, Arial, sans-serif" font-size="13" font-weight="600" fill="#111827">deleteAccessConfig</text>
+  <text x="32" y="321" font-family="Segoe UI, Arial, sans-serif" font-size="11" fill="#6b7280">official 10343ms / native 7.8ms</text>
+  <rect x="360" y="291" width="243.7" height="18" rx="4" fill="#14b8a6"/>
+  <text x="611.7" y="305" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="700" fill="#0f766e">1326x</text>
+  <text x="32" y="352" font-family="Segoe UI, Arial, sans-serif" font-size="13" font-weight="600" fill="#111827">listUser</text>
+  <text x="32" y="369" font-family="Segoe UI, Arial, sans-serif" font-size="11" fill="#6b7280">official 8024ms / native 6.4ms</text>
+  <rect x="360" y="339" width="230.4" height="18" rx="4" fill="#14b8a6"/>
+  <text x="598.4" y="353" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="700" fill="#0f766e">1254x</text>
+  <rect x="24" y="382" width="980" height="40" fill="#f8fafc"/>
+  <text x="32" y="400" font-family="Segoe UI, Arial, sans-serif" font-size="13" font-weight="600" fill="#111827">getUser</text>
+  <text x="32" y="417" font-family="Segoe UI, Arial, sans-serif" font-size="11" fill="#6b7280">official 7429ms / native 6.2ms</text>
+  <rect x="360" y="387" width="220.2" height="18" rx="4" fill="#14b8a6"/>
+  <text x="588.2" y="401" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="700" fill="#0f766e">1198x</text>
+  <text x="32" y="448" font-family="Segoe UI, Arial, sans-serif" font-size="13" font-weight="600" fill="#111827">getControllerMetaData</text>
+  <text x="32" y="465" font-family="Segoe UI, Arial, sans-serif" font-size="11" fill="#6b7280">official 7185ms / native 6ms</text>
+  <rect x="360" y="435" width="220.1" height="18" rx="4" fill="#14b8a6"/>
+  <text x="588.1" y="449" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="700" fill="#0f766e">1198x</text>
+  <rect x="24" y="478" width="980" height="40" fill="#f8fafc"/>
+  <text x="32" y="496" font-family="Segoe UI, Arial, sans-serif" font-size="13" font-weight="600" fill="#111827">setCommitLogReadAheadMode</text>
+  <text x="32" y="513" font-family="Segoe UI, Arial, sans-serif" font-size="11" fill="#6b7280">official 6691ms / native 5.8ms</text>
+  <rect x="360" y="483" width="212" height="18" rx="4" fill="#14b8a6"/>
+  <text x="580" y="497" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="700" fill="#0f766e">1154x</text>
+  <text x="32" y="544" font-family="Segoe UI, Arial, sans-serif" font-size="13" font-weight="600" fill="#111827">updateAclConfig</text>
+  <text x="32" y="561" font-family="Segoe UI, Arial, sans-serif" font-size="11" fill="#6b7280">official 10115ms / native 9.2ms</text>
+  <rect x="360" y="531" width="202.1" height="18" rx="4" fill="#14b8a6"/>
+  <text x="570.1" y="545" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="700" fill="#0f766e">1099x</text>
+  <rect x="24" y="574" width="980" height="40" fill="#f8fafc"/>
+  <text x="32" y="592" font-family="Segoe UI, Arial, sans-serif" font-size="13" font-weight="600" fill="#111827">updateControllerConfig</text>
+  <text x="32" y="609" font-family="Segoe UI, Arial, sans-serif" font-size="11" fill="#6b7280">official 7434ms / native 6.8ms</text>
+  <rect x="360" y="579" width="200.9" height="18" rx="4" fill="#14b8a6"/>
+  <text x="568.9" y="593" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="700" fill="#0f766e">1093x</text>
+  <text x="32" y="640" font-family="Segoe UI, Arial, sans-serif" font-size="13" font-weight="600" fill="#111827">getBrokerConfig</text>
+  <text x="32" y="657" font-family="Segoe UI, Arial, sans-serif" font-size="11" fill="#6b7280">official 7205ms / native 6.8ms</text>
+  <rect x="360" y="627" width="194.7" height="18" rx="4" fill="#14b8a6"/>
+  <text x="562.7" y="641" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="700" fill="#0f766e">1060x</text>
+  <text x="32" y="746" font-family="Segoe UI, Arial, sans-serif" font-size="12" fill="#6b7280">Public summary generated from the command performance table; rows with very small local-file baselines are excluded from this Top chart.</text>
+</svg>

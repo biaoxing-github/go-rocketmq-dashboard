@@ -14,6 +14,8 @@
 
 ![goadmin 与官方 mqadmin 性能对比](docs/assets/performance-speedup.svg)
 
+![goadmin Top 性能提升比](docs/assets/performance-speedup-top.svg)
+
 | 场景 | 官方 `mqadmin` 平均耗时 | `goadmin` auto/native 平均耗时 | 加速比 |
 | --- | ---: | ---: | ---: |
 | `topicList` | 4312 ms | 7.4 ms | 583x |
@@ -25,7 +27,7 @@
 
 数值会随机器、容器和 Broker 状态波动，建议主要看同环境下的相对差异：官方进程路径稳定在秒级，Go 原生路径通常在个位到几十毫秒级。
 
-完整命令级对比表见 [docs/performance.md](docs/performance.md)，当前公开表共收录 156 条命令/场景，包含官方 `mqadmin`、sidecar/兼容路径和 Go 原生路径的平均耗时与 diff 结果。
+完整命令级对比表见 [docs/performance.md](docs/performance.md)，当前公开表共收录 156 条命令/场景，包含官方 `mqadmin`、sidecar/兼容路径和 Go 原生路径的平均耗时、提升倍数、耗时下降率与 diff 结果。
 
 ## 快速开始
 
