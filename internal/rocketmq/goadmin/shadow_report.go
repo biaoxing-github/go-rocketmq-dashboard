@@ -28,6 +28,8 @@ type ShadowReportTarget struct {
 	StdoutBytes int `json:"stdout_bytes"`
 	// StderrBytes 是 stderr 原文字节数，不记录 stderr 文本。
 	StderrBytes int `json:"stderr_bytes"`
+	// ArtifactBytes 记录文件产物的字节数，不记录文件正文。
+	ArtifactBytes map[string]int `json:"artifact_bytes,omitempty"`
 	// Error 是 provider 返回的错误文本；无错误时为空字符串。
 	Error string `json:"error"`
 	// DurationMs 是 provider 调用耗时的毫秒数。
@@ -46,6 +48,8 @@ type ShadowReportDiff struct {
 	StderrDifferent bool `json:"stderr_different"`
 	// ErrorDifferent 表示 error 文本与 primary 不一致。
 	ErrorDifferent bool `json:"error_different"`
+	// ArtifactsDifferent 表示文件产物正文与 primary 不一致。
+	ArtifactsDifferent bool `json:"artifacts_different,omitempty"`
 	// DurationMs 是 target provider 调用耗时的毫秒数。
 	DurationMs int64 `json:"duration_ms"`
 }
@@ -114,6 +118,8 @@ type ShadowBatchPlanSampleReport struct {
 	Args []string `json:"args"`
 	// Providers 是本样本需要对照的 provider 路径集合。
 	Providers []ShadowProviderMode `json:"providers"`
+	// SerialTargets 表示同一样本内部的 shadow target 会串行执行。
+	SerialTargets bool `json:"serial_targets,omitempty"`
 	// MinSamples 是该类别至少需要采集的样本数量。
 	MinSamples int `json:"min_samples"`
 	// RequireP95 表示该样本需要在后续真实验证中统计 p95 延迟。
@@ -146,12 +152,13 @@ func NewShadowReport(result ShadowResult) ShadowReport {
 	}
 	for _, diff := range result.Diffs {
 		report.Diffs = append(report.Diffs, ShadowReportDiff{
-			Target:          diff.Target,
-			Matched:         diff.Matched,
-			StdoutDifferent: diff.StdoutDifferent,
-			StderrDifferent: diff.StderrDifferent,
-			ErrorDifferent:  diff.ErrorDifferent,
-			DurationMs:      diff.Duration.Milliseconds(),
+			Target:             diff.Target,
+			Matched:            diff.Matched,
+			StdoutDifferent:    diff.StdoutDifferent,
+			StderrDifferent:    diff.StderrDifferent,
+			ErrorDifferent:     diff.ErrorDifferent,
+			ArtifactsDifferent: diff.ArtifactsDifferent,
+			DurationMs:         diff.Duration.Milliseconds(),
 		})
 	}
 	return report
@@ -256,12 +263,13 @@ func newShadowBatchPlanSampleReports(samples []ShadowSample) []ShadowBatchPlanSa
 
 func newShadowBatchPlanSampleReport(sample ShadowSample) ShadowBatchPlanSampleReport {
 	return ShadowBatchPlanSampleReport{
-		Name:       sample.Name,
-		Args:       append([]string(nil), sample.Args...),
-		Providers:  append([]ShadowProviderMode(nil), sample.Providers...),
-		MinSamples: sample.MinSamples,
-		RequireP95: sample.RequireP95,
-		Notes:      sample.Notes,
+		Name:          sample.Name,
+		Args:          append([]string(nil), sample.Args...),
+		Providers:     append([]ShadowProviderMode(nil), sample.Providers...),
+		SerialTargets: sample.SerialTargets,
+		MinSamples:    sample.MinSamples,
+		RequireP95:    sample.RequireP95,
+		Notes:         sample.Notes,
 	}
 }
 
@@ -322,10 +330,22 @@ func shadowReportTargetNames(targets []ShadowTargetResult) []string {
 
 func newShadowReportTarget(result ShadowTargetResult) ShadowReportTarget {
 	return ShadowReportTarget{
-		Name:        result.Name,
-		StdoutBytes: len([]byte(result.Stdout)),
-		StderrBytes: len([]byte(result.Stderr)),
-		Error:       result.Error,
-		DurationMs:  result.Duration.Milliseconds(),
+		Name:          result.Name,
+		StdoutBytes:   len([]byte(result.Stdout)),
+		StderrBytes:   len([]byte(result.Stderr)),
+		ArtifactBytes: shadowArtifactByteSizes(result.Artifacts),
+		Error:         result.Error,
+		DurationMs:    result.Duration.Milliseconds(),
 	}
+}
+
+func shadowArtifactByteSizes(artifacts map[string]string) map[string]int {
+	if len(artifacts) == 0 {
+		return nil
+	}
+	sizes := make(map[string]int, len(artifacts))
+	for name, value := range artifacts {
+		sizes[name] = len([]byte(value))
+	}
+	return sizes
 }

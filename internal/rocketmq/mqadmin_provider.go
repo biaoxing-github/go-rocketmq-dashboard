@@ -386,6 +386,7 @@ func (p *MQAdminProvider) MessageChain(ctx context.Context, query MessageQuery) 
 
 	candidates := make([]MessageSearchResult, 0)
 	messageID := query.MessageID
+	var keyCandidate *MessageSearchResult
 	if messageID == "" && query.Key != "" {
 		results, err := p.searchMessageByKey(ctx, query)
 		if err != nil {
@@ -395,6 +396,7 @@ func (p *MQAdminProvider) MessageChain(ctx context.Context, query MessageQuery) 
 			return MessageStatusChain{}, errors.New("未查询到匹配 key 的消息")
 		}
 		candidates = results
+		keyCandidate = &results[0]
 		messageID = results[0].MessageID
 	}
 	query.MessageID = messageID
@@ -403,6 +405,8 @@ func (p *MQAdminProvider) MessageChain(ctx context.Context, query MessageQuery) 
 	var err error
 	if query.HasQueueOffset {
 		message, err = p.cachedMessageByOffset(ctx, query)
+	} else if keyCandidate != nil {
+		message, err = p.cachedMessageByKeyCandidate(ctx, query, *keyCandidate)
 	} else {
 		message, err = p.cachedMessageDetail(ctx, query.Topic, messageID)
 	}
@@ -428,6 +432,73 @@ func compactKeys(key string) []string {
 		return nil
 	}
 	return []string{key}
+}
+
+// cachedMessageByKeyCandidate 用 queryMsgByKey 返回的队列位点回查消息详情，避免把候选 UNIQ_KEY 误当成 OffsetID。
+func (p *MQAdminProvider) cachedMessageByKeyCandidate(ctx context.Context, query MessageQuery, candidate MessageSearchResult) (MessageDetail, error) {
+	detailQuery := query
+	detailQuery.QueueID = candidate.QueueID
+	detailQuery.QueueOffset = candidate.QueueOffset
+	detailQuery.HasQueueOffset = true
+	rows, err := p.topicStatusRowsForKeyCandidate(ctx, detailQuery.Topic, detailQuery.BrokerName, candidate)
+	if err != nil {
+		return MessageDetail{}, err
+	}
+	var lastErr error
+	for _, row := range rows {
+		detailQuery.BrokerName = row.BrokerName
+		message, err := p.cachedMessageByOffset(ctx, detailQuery)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if messageMatchesKeyCandidate(message, query.Key, candidate) {
+			return message, nil
+		}
+		lastErr = fmt.Errorf("key 候选消息不匹配: broker=%s queue=%d offset=%d", row.BrokerName, candidate.QueueID, candidate.QueueOffset)
+	}
+	if lastErr != nil {
+		return MessageDetail{}, lastErr
+	}
+	return MessageDetail{}, errors.New("未找到 key 候选消息所在队列")
+}
+
+// topicStatusRowsForKeyCandidate 根据候选 queueId/offset 找到真实 Broker；显式 brokerName 优先用于用户已知队列来源的场景。
+func (p *MQAdminProvider) topicStatusRowsForKeyCandidate(ctx context.Context, topic string, brokerName string, candidate MessageSearchResult) ([]TopicStatusRow, error) {
+	if strings.TrimSpace(brokerName) != "" {
+		return []TopicStatusRow{{BrokerName: strings.TrimSpace(brokerName), QueueID: candidate.QueueID, MinOffset: candidate.QueueOffset, MaxOffset: candidate.QueueOffset + 1}}, nil
+	}
+	status, err := p.TopicStatus(ctx, topic)
+	if err != nil {
+		return nil, err
+	}
+	rows := make([]TopicStatusRow, 0, 1)
+	for _, row := range status.Rows {
+		if row.QueueID != candidate.QueueID {
+			continue
+		}
+		if candidate.QueueOffset < row.MinOffset || candidate.QueueOffset >= row.MaxOffset {
+			continue
+		}
+		rows = append(rows, row)
+	}
+	if len(rows) == 0 {
+		return nil, fmt.Errorf("未找到 key 候选消息所在队列: topic=%s queueId=%d offset=%d", topic, candidate.QueueID, candidate.QueueOffset)
+	}
+	return rows, nil
+}
+
+// messageMatchesKeyCandidate 校验回查到的 offset 详情仍属于当前 key 候选，防止多 Broker 同 queueId 时误取其它消息。
+func messageMatchesKeyCandidate(message MessageDetail, key string, candidate MessageSearchResult) bool {
+	if message.MessageID == candidate.MessageID || message.TraceMessageID == candidate.MessageID {
+		return true
+	}
+	for _, value := range message.Keys {
+		if value == key {
+			return true
+		}
+	}
+	return key == ""
 }
 
 func (p *MQAdminProvider) searchMessageByKey(ctx context.Context, query MessageQuery) ([]MessageSearchResult, error) {
@@ -923,7 +994,7 @@ func normalizeQueryWindow(begin int64, end int64) (int64, int64) {
 
 func keySearchWindow(query MessageQuery) (int64, int64) {
 	if query.BeginTimestamp > 0 || query.EndTimestamp > 0 {
-		return normalizeQueryWindow(query.BeginTimestamp, query.EndTimestamp)
+		return explicitQueryWindow(query.BeginTimestamp, query.EndTimestamp)
 	}
 	end := time.Now().UnixMilli()
 	begin := end - 2*time.Hour.Milliseconds()
@@ -932,12 +1003,26 @@ func keySearchWindow(query MessageQuery) (int64, int64) {
 
 func traceQueryWindow(query MessageQuery, message MessageDetail) (int64, int64) {
 	if query.BeginTimestamp > 0 || query.EndTimestamp > 0 {
-		return normalizeQueryWindow(query.BeginTimestamp, query.EndTimestamp)
+		return explicitQueryWindow(query.BeginTimestamp, query.EndTimestamp)
 	}
 	if message.StoreTimestamp > 0 {
 		return message.StoreTimestamp - 30*time.Minute.Milliseconds(), message.StoreTimestamp + 30*time.Minute.Milliseconds()
 	}
 	return normalizeQueryWindow(0, 0)
+}
+
+// explicitQueryWindow 保留用户显式给出的 begin=0，用于查询历史 fixture 的全量时间窗。
+func explicitQueryWindow(begin int64, end int64) (int64, int64) {
+	if end <= 0 {
+		end = time.Now().UnixMilli()
+	}
+	if begin < 0 {
+		begin = 0
+	}
+	if begin > end {
+		begin = end
+	}
+	return begin, end
 }
 
 func (p *MQAdminProvider) run(ctx context.Context, args ...string) (string, error) {

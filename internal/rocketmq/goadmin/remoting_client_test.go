@@ -1199,6 +1199,174 @@ func TestFormatExportMetadataClusterMatchesOfficialJSONOrder(t *testing.T) {
 	}
 }
 
+func TestExportMetadataTopicConfigsFromOrderedPairsKeepsHashMapBucketChainOrder(t *testing.T) {
+	firstTopic, secondTopic := exportMetadataCollidingTopicNamesForTest(t, 2)
+	pairs := []orderedJSONPair{
+		{Key: firstTopic, Value: exportMetadataTopicConfigValue(firstTopic, 4)},
+		{Key: secondTopic, Value: exportMetadataTopicConfigValue(secondTopic, 8)},
+	}
+
+	configs := exportMetadataTopicConfigsFromOrderedPairs(pairs)
+
+	actual := []string{configs[0].Name, configs[1].Name}
+	expected := []string{firstTopic, secondTopic}
+	if !reflect.DeepEqual(actual, expected) {
+		t.Fatalf("expected equal-bucket topic configs to keep insertion order, expected=%v actual=%v", expected, actual)
+	}
+}
+
+func TestJavaConcurrentHashMapOrderedJSONPairsMatchesExportMetadataWrapperEntrySet(t *testing.T) {
+	pairs := []orderedJSONPair{
+		{Key: "GoadminM6TraceRichTest", Value: exportMetadataTopicConfigValue("GoadminM6TraceRichTest", 4)},
+		{Key: "SCHEDULE_TOPIC_XXXX", Value: exportMetadataTopicConfigValue("SCHEDULE_TOPIC_XXXX", 1)},
+		{Key: "TopicTest", Value: exportMetadataTopicConfigValue("TopicTest", 4)},
+		{Key: "55924048bd08", Value: exportMetadataTopicConfigValue("55924048bd08", 1)},
+		{Key: "rmq_sys_SYNC_BROKER_MEMBER_55924048bd08", Value: exportMetadataTopicConfigValue("rmq_sys_SYNC_BROKER_MEMBER_55924048bd08", 1)},
+		{Key: "GoadminM6SendTraceOfficial20260620115320", Value: exportMetadataTopicConfigValue("GoadminM6SendTraceOfficial20260620115320", 1)},
+		{Key: "SELF_TEST_TOPIC", Value: exportMetadataTopicConfigValue("SELF_TEST_TOPIC", 1)},
+		{Key: "GoadminM6SendTraceNative20260620115651", Value: exportMetadataTopicConfigValue("GoadminM6SendTraceNative20260620115651", 1)},
+		{Key: "GoadminQueryKeyTest", Value: exportMetadataTopicConfigValue("GoadminQueryKeyTest", 4)},
+		{Key: "rmq_sys_wheel_timer", Value: exportMetadataTopicConfigValue("rmq_sys_wheel_timer", 1)},
+		{Key: "%RETRY%GoadminConsumerStatusM575", Value: exportMetadataTopicConfigValue("%RETRY%GoadminConsumerStatusM575", 1)},
+		{Key: "%RETRY%CID_JODIE_1", Value: exportMetadataTopicConfigValue("%RETRY%CID_JODIE_1", 1)},
+		{Key: "DefaultCluster", Value: exportMetadataTopicConfigValue("DefaultCluster", 1)},
+		{Key: "%RETRY%GoadminConsumerStatusM575Group", Value: exportMetadataTopicConfigValue("%RETRY%GoadminConsumerStatusM575Group", 1)},
+		{Key: "DefaultCluster_REPLY_TOPIC", Value: exportMetadataTopicConfigValue("DefaultCluster_REPLY_TOPIC", 1)},
+		{Key: "GoadminStaticProbe0612", Value: exportMetadataTopicConfigValue("GoadminStaticProbe0612", 4)},
+		{Key: "%RETRY%TOOLS_CONSUMER", Value: exportMetadataTopicConfigValue("%RETRY%TOOLS_CONSUMER", 1)},
+		{Key: "rmq_sys_REVIVE_LOG_DefaultCluster", Value: exportMetadataTopicConfigValue("rmq_sys_REVIVE_LOG_DefaultCluster", 1)},
+		{Key: "GoadminM6TraceMsgChain_20260618153619", Value: exportMetadataTopicConfigValue("GoadminM6TraceMsgChain_20260618153619", 1)},
+		{Key: "RMQ_SYS_TRANS_HALF_TOPIC", Value: exportMetadataTopicConfigValue("RMQ_SYS_TRANS_HALF_TOPIC", 1)},
+		{Key: "RMQ_SYS_TRACE_TOPIC", Value: exportMetadataTopicConfigValue("RMQ_SYS_TRACE_TOPIC", 1)},
+		{Key: "RMQ_SYS_TRANS_OP_HALF_TOPIC", Value: exportMetadataTopicConfigValue("RMQ_SYS_TRANS_OP_HALF_TOPIC", 1)},
+		{Key: "GoadminConsumerStatusM575", Value: exportMetadataTopicConfigValue("GoadminConsumerStatusM575", 8)},
+		{Key: "TBW102", Value: exportMetadataTopicConfigValue("TBW102", 1)},
+		{Key: "BenchmarkTest", Value: exportMetadataTopicConfigValue("BenchmarkTest", 1)},
+		{Key: "%RETRY%__MONITOR_CONSUMER", Value: exportMetadataTopicConfigValue("%RETRY%__MONITOR_CONSUMER", 1)},
+		{Key: "%RETRY%GoadminConsumerStatusM587Group", Value: exportMetadataTopicConfigValue("%RETRY%GoadminConsumerStatusM587Group", 1)},
+		{Key: "OFFSET_MOVED_EVENT", Value: exportMetadataTopicConfigValue("OFFSET_MOVED_EVENT", 1)},
+	}
+
+	ordered := javaConcurrentHashMapOrderedJSONPairs(pairs)
+	orderedNames := orderedJSONPairKeys(ordered)
+	expectedOrderedNames := []string{
+		"RMQ_SYS_TRANS_HALF_TOPIC",
+		"GoadminM6SendTraceNative20260620115651",
+		"GoadminConsumerStatusM575",
+		"BenchmarkTest",
+		"%RETRY%GoadminConsumerStatusM575Group",
+		"TBW102",
+		"GoadminM6TraceRichTest",
+		"rmq_sys_SYNC_BROKER_MEMBER_55924048bd08",
+		"rmq_sys_REVIVE_LOG_DefaultCluster",
+		"SELF_TEST_TOPIC",
+		"SCHEDULE_TOPIC_XXXX",
+		"%RETRY%CID_JODIE_1",
+		"RMQ_SYS_TRACE_TOPIC",
+		"GoadminQueryKeyTest",
+		"DefaultCluster_REPLY_TOPIC",
+		"rmq_sys_wheel_timer",
+		"RMQ_SYS_TRANS_OP_HALF_TOPIC",
+		"TopicTest",
+		"GoadminStaticProbe0612",
+		"GoadminM6SendTraceOfficial20260620115320",
+		"%RETRY%__MONITOR_CONSUMER",
+		"%RETRY%GoadminConsumerStatusM587Group",
+		"GoadminM6TraceMsgChain_20260618153619",
+		"OFFSET_MOVED_EVENT",
+		"DefaultCluster",
+		"%RETRY%GoadminConsumerStatusM575",
+		"55924048bd08",
+		"%RETRY%TOOLS_CONSUMER",
+	}
+	if !reflect.DeepEqual(orderedNames, expectedOrderedNames) {
+		t.Fatalf("expected decoded TopicConfigSerializeWrapper entrySet order, expected=%v actual=%v", expectedOrderedNames, orderedNames)
+	}
+
+	wrapper := orderedJSONValue{
+		Kind: orderedJSONObject,
+		Pairs: []orderedJSONPair{
+			{Key: "dataVersion", Value: orderedJSONValue{Kind: orderedJSONObject}},
+			{Key: "topicConfigTable", Value: orderedJSONValue{Kind: orderedJSONObject, Pairs: pairs}},
+		},
+	}
+	systemTopics := map[string]bool{
+		"BenchmarkTest":               true,
+		"DefaultCluster":              true,
+		"DefaultCluster_REPLY_TOPIC":  true,
+		"RMQ_SYS_TRANS_OP_HALF_TOPIC": true,
+		"TBW102":                      true,
+		"55924048bd08":                true,
+	}
+	filterTopicConfigWrapper(&wrapper, systemTopics, false)
+	table, ok := wrapper.objectField("topicConfigTable")
+	if !ok {
+		t.Fatalf("expected filtered wrapper to keep topicConfigTable")
+	}
+	filteredNames := orderedJSONPairKeys(table.Pairs)
+	expectedFilteredNames := []string{
+		"GoadminM6SendTraceNative20260620115651",
+		"GoadminConsumerStatusM575",
+		"GoadminM6TraceRichTest",
+		"GoadminQueryKeyTest",
+		"TopicTest",
+		"GoadminStaticProbe0612",
+		"GoadminM6SendTraceOfficial20260620115320",
+		"GoadminM6TraceMsgChain_20260618153619",
+	}
+	if !reflect.DeepEqual(filteredNames, expectedFilteredNames) {
+		t.Fatalf("expected user topic filter to preserve decoded entrySet order, expected=%v actual=%v", expectedFilteredNames, filteredNames)
+	}
+
+	configs := exportMetadataTopicConfigsFromOrderedPairs(table.Pairs)
+	finalNames := exportMetadataTopicConfigNames(configs)
+	expectedFinalNames := []string{
+		"GoadminQueryKeyTest",
+		"GoadminM6SendTraceNative20260620115651",
+		"GoadminConsumerStatusM575",
+		"GoadminM6TraceMsgChain_20260618153619",
+		"TopicTest",
+		"GoadminStaticProbe0612",
+		"GoadminM6SendTraceOfficial20260620115320",
+		"GoadminM6TraceRichTest",
+	}
+	if !reflect.DeepEqual(finalNames, expectedFinalNames) {
+		t.Fatalf("expected cluster HashMap output order to match official metadata.json, expected=%v actual=%v", expectedFinalNames, finalNames)
+	}
+}
+
+func orderedJSONPairKeys(pairs []orderedJSONPair) []string {
+	keys := make([]string, 0, len(pairs))
+	for _, pair := range pairs {
+		keys = append(keys, pair.Key)
+	}
+	return keys
+}
+
+func exportMetadataTopicConfigNames(configs []exportMetadataTopicConfig) []string {
+	names := make([]string, 0, len(configs))
+	for _, config := range configs {
+		names = append(names, config.Name)
+	}
+	return names
+}
+
+func exportMetadataCollidingTopicNamesForTest(t *testing.T, count int) (string, string) {
+	t.Helper()
+	capacity := javaHashMapCapacity(count)
+	seen := make(map[int]string, capacity)
+	for index := 0; index < 1024; index++ {
+		name := fmt.Sprintf("GoadminExportCollisionTopic%03d", index)
+		bucket := javaHashMapBucketWithCapacity(name, capacity)
+		if previous, ok := seen[bucket]; ok {
+			return previous, name
+		}
+		seen[bucket] = name
+	}
+	t.Fatalf("expected to find two topic names in the same Java HashMap bucket")
+	return "", ""
+}
+
 func TestFilterExportMetadataWrappersMatchOfficialUserFilters(t *testing.T) {
 	topicWrapper := orderedJSONValue{
 		Kind: orderedJSONObject,
@@ -1411,6 +1579,29 @@ func TestRunNativeExportMetricsFormatsOfficialSuccess(t *testing.T) {
 	}
 	if callIndex != len(expectedFilePaths) {
 		t.Fatalf("expected %d exportMetrics calls, got %d", len(expectedFilePaths), callIndex)
+	}
+}
+
+func TestDecodeBrokerRuntimeStatsBodyAcceptsFastJSONNumericKeys(t *testing.T) {
+	body := []byte(`{"table":{0:"plain-zero-key","putTps":"1.0 2.0 3.0","getTransferredTps":"4.0 5.0 6.0"}}`)
+
+	stats, err := decodeBrokerRuntimeStatsBody(body)
+	if err != nil {
+		t.Fatalf("decode broker runtime stats: %v", err)
+	}
+	if stats["putTps"] != "1.0 2.0 3.0" || stats["0"] != "plain-zero-key" {
+		t.Fatalf("unexpected runtime stats %#v", stats)
+	}
+}
+
+func TestDecodeOrderedJSONValueAcceptsFastJSONNumericKeys(t *testing.T) {
+	value, err := decodeOrderedJSONValue(`{"topicQueueMappingInfoMap":{0:{"topic":"TopicA"}},"topicConfigTable":{"TopicA":{"readQueueNums":4}}}`)
+	if err != nil {
+		t.Fatalf("decode ordered JSON value: %v", err)
+	}
+	mapping, ok := value.objectField("topicQueueMappingInfoMap")
+	if !ok || len(mapping.Pairs) != 1 || mapping.Pairs[0].Key != "0" {
+		t.Fatalf("unexpected numeric key mapping %#v", mapping)
 	}
 }
 
@@ -12182,6 +12373,32 @@ func TestRunNativeQueryMsgByKeyAcceptsOfficialClusterFlag(t *testing.T) {
 func TestRunNativeQueryMsgByOffsetFormatsOfficialDetail(t *testing.T) {
 	bornTimestamp := int64(1780891116911)
 	storeTimestamp := int64(1780891116954)
+	message := &messageDetail{
+		OffsetMessageID:  "AC10000100002A9F00000000000003E8",
+		DisplayMessageID: "UNIQ-1",
+		Topic:            "TopicTest",
+		Keys:             "OrderKey",
+		QueueID:          0,
+		QueueOffset:      7,
+		CommitLogOffset:  1000,
+		ReconsumeTimes:   0,
+		BornTimestamp:    bornTimestamp,
+		StoreTimestamp:   storeTimestamp,
+		BornHost:         "127.0.0.1:1000",
+		StoreHost:        "172.16.0.1:10911",
+		SysFlag:          0,
+		Body:             []byte("hello"),
+		Properties: []messageProperty{
+			{Key: "KEYS", Value: "OrderKey"},
+			{Key: "UNIQ_KEY", Value: "UNIQ-1"},
+			{Key: "WAIT", Value: "true"},
+			{Key: "TRACE_ON", Value: "true"},
+			{Key: "MSG_REGION", Value: "DefaultRegion"},
+			{Key: "CLUSTER", Value: "DefaultCluster"},
+			{Key: "MIN_OFFSET", Value: "0"},
+			{Key: "MAX_OFFSET", Value: "8"},
+		},
+	}
 	client := nativeClientFunc{
 		queryMessageByOffset: func(ctx context.Context, nameServer string, topic string, brokerName string, queueID int, offset int64) (*messageDetail, error) {
 			if nameServer != "127.0.0.1:9876" {
@@ -12190,31 +12407,15 @@ func TestRunNativeQueryMsgByOffsetFormatsOfficialDetail(t *testing.T) {
 			if topic != "TopicTest" || brokerName != "broker-a" || queueID != 0 || offset != 7 {
 				t.Fatalf("unexpected query args topic=%s broker=%s queue=%d offset=%d", topic, brokerName, queueID, offset)
 			}
-			return &messageDetail{
-				OffsetMessageID:  "AC10000100002A9F00000000000003E8",
-				DisplayMessageID: "UNIQ-1",
-				Topic:            "TopicTest",
-				Keys:             "OrderKey",
-				QueueID:          0,
-				QueueOffset:      7,
-				CommitLogOffset:  1000,
-				ReconsumeTimes:   0,
-				BornTimestamp:    bornTimestamp,
-				StoreTimestamp:   storeTimestamp,
-				BornHost:         "127.0.0.1:1000",
-				StoreHost:        "172.16.0.1:10911",
-				SysFlag:          0,
-				Body:             []byte("hello"),
-				Properties: []messageProperty{
-					{Key: "KEYS", Value: "OrderKey"},
-					{Key: "UNIQ_KEY", Value: "UNIQ-1"},
-					{Key: "WAIT", Value: "true"},
-					{Key: "TRACE_ON", Value: "true"},
-					{Key: "MSG_REGION", Value: "DefaultRegion"},
-					{Key: "CLUSTER", Value: "DefaultCluster"},
-					{Key: "MIN_OFFSET", Value: "0"},
-					{Key: "MAX_OFFSET", Value: "8"},
-				},
+			return message, nil
+		},
+		messageTrackDetail: func(ctx context.Context, nameServer string, detail *messageDetail) ([]messageTrack, error) {
+			if detail != message {
+				t.Fatalf("messageTrackDetail should receive the queried message detail")
+			}
+			return []messageTrack{
+				{ConsumerGroup: "GroupA", TrackType: "PULL"},
+				{ConsumerGroup: "GroupB", TrackType: "NOT_ONLINE", ExceptionDesc: "CODE:206 DESC:consumer not online"},
 			}, nil
 		},
 	}
@@ -12251,9 +12452,56 @@ func TestRunNativeQueryMsgByOffsetFormatsOfficialDetail(t *testing.T) {
 			fmt.Sprintf("%-20s %s\n", "Properties:", "{MSG_REGION=DefaultRegion, UNIQ_KEY=UNIQ-1, CLUSTER=DefaultCluster, MIN_OFFSET=0, KEYS=OrderKey, WAIT=true, TRACE_ON=true, MAX_OFFSET=8}") +
 			fmt.Sprintf("%-20s %s\n", "Message Body Path:", "/tmp/rocketmq/msgbodys/UNIQ-1") +
 			fmt.Sprintf("%-20s %s\n", "Message Body:", "hello") +
-			"\n\nWARN: No Consumer"
+			"\n\n" +
+			"MessageTrack [consumerGroup=GroupA, trackType=PULL, exceptionDesc=null]\n" +
+			"MessageTrack [consumerGroup=GroupB, trackType=NOT_ONLINE, exceptionDesc=CODE:206 DESC:consumer not online]\n"
 	if output != expected {
 		t.Fatalf("queryMsgByOffset output mismatch\nexpected:\n%s\nactual:\n%s", expected, output)
+	}
+}
+
+func TestRunNativeQueryMsgByOffsetPrintsWarnWhenNoConsumer(t *testing.T) {
+	message := &messageDetail{
+		OffsetMessageID: "AC10000100002A9F00000000000003E8",
+		Topic:           "TopicTest",
+		QueueID:         0,
+		QueueOffset:     7,
+		CommitLogOffset: 1000,
+		BornHost:        "127.0.0.1:1000",
+		StoreHost:       "172.16.0.1:10911",
+		Body:            []byte("hello"),
+		Properties: []messageProperty{
+			{Key: "UNIQ_KEY", Value: "UNIQ-1"},
+		},
+	}
+	client := nativeClientFunc{
+		queryMessageByOffset: func(ctx context.Context, nameServer string, topic string, brokerName string, queueID int, offset int64) (*messageDetail, error) {
+			return message, nil
+		},
+		messageTrackDetail: func(ctx context.Context, nameServer string, detail *messageDetail) ([]messageTrack, error) {
+			if detail != message {
+				t.Fatalf("messageTrackDetail should receive the queried message detail")
+			}
+			return nil, nil
+		},
+	}
+
+	output, supported, err := runNativeCommand(context.Background(), []string{
+		"queryMsgByOffset",
+		"-n", "127.0.0.1:9876",
+		"-t", "TopicTest",
+		"-b", "broker-a",
+		"-i", "0",
+		"-o", "7",
+	}, client)
+	if err != nil {
+		t.Fatalf("run native queryMsgByOffset: %v", err)
+	}
+	if !supported {
+		t.Fatalf("expected queryMsgByOffset to be supported")
+	}
+	if !strings.Contains(output, "WARN: No Consumer") {
+		t.Fatalf("queryMsgByOffset should keep WARN output when MessageTrack rows are empty:\n%s", output)
 	}
 }
 
@@ -12601,6 +12849,50 @@ func TestRunNativeQueryMsgByIdDecodesGBKBodyFormat(t *testing.T) {
 	}
 	if !strings.Contains(output, "Message Body:        中文") {
 		t.Fatalf("expected GBK body to be decoded as Chinese text, got:\n%s", output)
+	}
+}
+
+func TestRunNativeQueryMsgByOffsetReplacesInvalidUTF8Bytes(t *testing.T) {
+	client := nativeClientFunc{
+		queryMessageByOffset: func(ctx context.Context, nameServer string, topic string, brokerName string, queueID int, offset int64) (*messageDetail, error) {
+			return &messageDetail{
+				OffsetMessageID:  "AC10000100002A9F00000000000003E8",
+				DisplayMessageID: "UNIQ-BADUTF8",
+				Topic:            "TopicTest",
+				QueueID:          3,
+				QueueOffset:      442017,
+				CommitLogOffset:  1000,
+				BornHost:         "127.0.0.1:1000",
+				StoreHost:        "172.16.0.1:10911",
+				// 官方 Java UTF-8 解码会把这四个非法字节逐个替换成 U+FFFD。
+				Body: []byte{0xD6, 0xD0, 0xCE, 0xC4},
+				Properties: []messageProperty{
+					{Key: "UNIQ_KEY", Value: "UNIQ-BADUTF8"},
+				},
+			}, nil
+		},
+		messageTrackDetail: func(ctx context.Context, nameServer string, detail *messageDetail) ([]messageTrack, error) {
+			return []messageTrack{{ConsumerGroup: "GroupA", TrackType: "PULL"}}, nil
+		},
+	}
+
+	output, supported, err := runNativeCommand(context.Background(), []string{
+		"queryMsgByOffset",
+		"-n", "127.0.0.1:9876",
+		"-t", "TopicTest",
+		"-b", "broker-a",
+		"-i", "3",
+		"-o", "442017",
+		"-f", "UTF-8",
+	}, client)
+	if err != nil {
+		t.Fatalf("run native queryMsgByOffset invalid UTF-8 bodyFormat: %v", err)
+	}
+	if !supported {
+		t.Fatalf("expected queryMsgByOffset to be supported")
+	}
+	if !strings.Contains(output, "Message Body:        ����") {
+		t.Fatalf("expected invalid UTF-8 bytes to be replaced like official Java decoder, got:\n%s", output)
 	}
 }
 

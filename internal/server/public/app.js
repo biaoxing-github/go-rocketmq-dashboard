@@ -46,7 +46,7 @@ const state = {
   consumerOffsetResetAutoGroup: "",
   consumerOffsetResetAutoTopic: "",
   lastConsumerOffsetResetResult: null,
-  nameServerChoices: [],
+  nameServerEnvironments: [],
   lastRefreshTriggerText: "",
   snapshotPollTimer: null,
   snapshotPollCount: 0
@@ -263,10 +263,20 @@ function setSubtab(group, target) {
   }
 }
 
+// renderCurrentNameServerLabel 在侧栏同时展示自定义环境名和真实 NameServer 地址。
+function renderCurrentNameServerLabel() {
+  const current = currentNameServer();
+  const environment = findNameServerEnvironment(current);
+  const label = environment && environment.name !== environment.address
+    ? `${environment.name} · ${environment.address}`
+    : current;
+  $("#nameServer").textContent = label || "-";
+}
+
 // renderHealth 把后端 health 信息写入侧栏，让 NameServer 和运行模式一眼可见。
 function renderHealth(payload) {
   state.health = payload.data || {};
-  $("#nameServer").textContent = state.health.nameServer || "-";
+  renderCurrentNameServerLabel();
   $("#serviceMode").textContent = state.health.mode || "-";
   $("#latencyBudget").textContent = `${state.health.latencyBudgetMillis ?? "-"} ms`;
   renderNameServerOptions();
@@ -282,59 +292,121 @@ async function loadHealth() {
 function renderConfig(payload) {
   state.config = payload.data || {};
   const current = state.config.nameServer || "";
-  $("#nameServer").textContent = current || "-";
+  const currentEnvironment = findNameServerEnvironment(current);
+  renderCurrentNameServerLabel();
   $("#nameServerInput").value = current;
+  $("#nameServerNameInput").value = nameServerInputName(currentEnvironment);
   renderNameServerOptions();
   $("#nameServerSwitchStatus").textContent = current ? "当前连接" : "未配置";
   $("#nameServerDialogStatus").textContent = current ? "当前连接" : "等待输入";
 }
 
-// readStoredNameServers 只读取用户在浏览器里添加过的集群地址，避免前端候选依赖启动配置。
-function readStoredNameServers() {
+// readStoredNameServerEnvironments 读取浏览器里保存的命名环境，并兼容旧版纯地址数组。
+function readStoredNameServerEnvironments() {
   try {
     const parsed = JSON.parse(window.localStorage.getItem(NAME_SERVER_STORAGE_KEY) || "[]");
-    return uniqueNameServers(Array.isArray(parsed) ? parsed : []);
+    return mergeNameServerEnvironments(Array.isArray(parsed) ? parsed : []);
   } catch {
     return [];
   }
 }
 
-// writeStoredNameServers 保存弹窗新增的 NameServer，下一次打开页面仍可直接切换。
-function writeStoredNameServers(values) {
+// writeStoredNameServerEnvironments 保存命名环境，下一次打开页面仍可直接按名称切换。
+function writeStoredNameServerEnvironments(values) {
   try {
-    window.localStorage.setItem(NAME_SERVER_STORAGE_KEY, JSON.stringify(uniqueNameServers(values)));
+    window.localStorage.setItem(NAME_SERVER_STORAGE_KEY, JSON.stringify(mergeNameServerEnvironments(values)));
   } catch {
     $("#nameServerDialogStatus").textContent = "本地列表保存失败";
   }
 }
 
-// uniqueNameServers 对用户输入做去重和空值过滤，保持弹窗列表稳定。
-function uniqueNameServers(values) {
-  const seen = new Set();
-  const result = [];
-  for (const value of values || []) {
-    const nameServer = String(value || "").trim();
-    if (!nameServer || seen.has(nameServer)) {
-      continue;
-    }
-    seen.add(nameServer);
-    result.push(nameServer);
+// normalizeNameServerEnvironment 把旧字符串和新对象统一成可渲染的环境条目。
+function normalizeNameServerEnvironment(value) {
+  if (typeof value === "string") {
+    const address = value.trim();
+    return address ? { name: address, address } : null;
   }
-  return result;
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const address = String(value.address || value.nameServer || value.value || "").trim();
+  if (!address) {
+    return null;
+  }
+  const name = String(value.name || value.label || "").trim() || address;
+  return { name, address };
+}
+
+// mergeNameServerEnvironments 按地址去重，并保留用户保存过的自定义名称。
+function mergeNameServerEnvironments(...groups) {
+  const byAddress = new Map();
+  for (const group of groups) {
+    for (const value of group || []) {
+      const environment = normalizeNameServerEnvironment(value);
+      if (!environment) {
+        continue;
+      }
+      const existing = byAddress.get(environment.address);
+      if (!existing) {
+        byAddress.set(environment.address, environment);
+        continue;
+      }
+      if (existing.name === existing.address && environment.name !== environment.address) {
+        existing.name = environment.name;
+      }
+    }
+  }
+  return Array.from(byAddress.values());
 }
 
 function currentNameServer() {
   return state.config?.nameServer || state.health?.nameServer || "";
 }
 
-function rememberNameServer(nameServer) {
-  const choices = uniqueNameServers([nameServer, ...readStoredNameServers()]);
-  writeStoredNameServers(choices);
-  state.nameServerChoices = choices;
+function configuredNameServers() {
+  return mergeNameServerEnvironments(
+    state.config?.availableNameServers || [],
+    state.health?.availableNameServers || []
+  );
 }
 
-function getNameServerChoices() {
-  return uniqueNameServers([currentNameServer(), ...readStoredNameServers()]);
+function getNameServerEnvironments() {
+  const current = currentNameServer();
+  const currentEntry = current ? [{ address: current, name: current }] : [];
+  return mergeNameServerEnvironments(
+    currentEntry,
+    readStoredNameServerEnvironments(),
+    configuredNameServers()
+  );
+}
+
+function findNameServerEnvironment(address) {
+  const trimmed = String(address || "").trim();
+  if (!trimmed) {
+    return null;
+  }
+  return getNameServerEnvironments().find((environment) => environment.address === trimmed) || null;
+}
+
+function nameServerInputName(environment) {
+  if (!environment || environment.name === environment.address) {
+    return "";
+  }
+  return environment.name;
+}
+
+function rememberNameServerEnvironment(nameServer, name, extraNameServers = []) {
+  const address = String(nameServer || "").trim();
+  if (!address) {
+    return;
+  }
+  const saved = mergeNameServerEnvironments(
+    [{ address, name: String(name || "").trim() || address }],
+    extraNameServers,
+    readStoredNameServerEnvironments()
+  );
+  writeStoredNameServerEnvironments(saved);
+  state.nameServerEnvironments = saved;
 }
 
 function renderNameServerOptions() {
@@ -343,18 +415,21 @@ function renderNameServerOptions() {
     return;
   }
   const current = currentNameServer();
-  const choices = getNameServerChoices();
-  state.nameServerChoices = choices;
-  $("#nameServerChoiceCount").textContent = String(choices.length);
-  if (!choices.length) {
+  const environments = getNameServerEnvironments();
+  state.nameServerEnvironments = environments;
+  $("#nameServerChoiceCount").textContent = String(environments.length);
+  if (!environments.length) {
     list.innerHTML = `<button type="button" class="nameserver-choice empty-choice" disabled>暂无已添加 NameServer</button>`;
     return;
   }
-  list.innerHTML = choices.map((value) => {
-    const active = value === current;
+  list.innerHTML = environments.map((environment) => {
+    const active = environment.address === current;
     return `
-      <button class="nameserver-choice ${active ? "active" : ""}" type="button" data-name-server-choice="${escapeAttr(value)}">
-        <span>${escapeHTML(value)}</span>
+      <button class="nameserver-choice ${active ? "active" : ""}" type="button" data-name-server-choice="${escapeAttr(environment.address)}" data-name-server-name="${escapeAttr(nameServerInputName(environment))}">
+        <span class="nameserver-choice-main">
+          <strong>${escapeHTML(environment.name)}</strong>
+          <em>${escapeHTML(environment.address)}</em>
+        </span>
         <small>${active ? "当前连接" : "点击切换"}</small>
       </button>
     `;
@@ -362,12 +437,14 @@ function renderNameServerOptions() {
   list.querySelectorAll("[data-name-server-choice]").forEach((button) => {
     button.addEventListener("click", () => {
       const nextNameServer = button.dataset.nameServerChoice || "";
+      const nextNameServerName = button.dataset.nameServerName || "";
       $("#nameServerInput").value = nextNameServer;
+      $("#nameServerNameInput").value = nextNameServerName;
       if (nextNameServer === currentNameServer()) {
         $("#nameServerDialogStatus").textContent = "当前连接";
         return;
       }
-      switchNameServer(nextNameServer);
+      switchNameServer(nextNameServer, nextNameServerName);
     });
   });
 }
@@ -379,11 +456,13 @@ async function loadConfig() {
 
 function openNameServerDialog() {
   const current = currentNameServer();
+  const currentEnvironment = findNameServerEnvironment(current);
   $("#nameServerInput").value = current;
+  $("#nameServerNameInput").value = nameServerInputName(currentEnvironment);
   $("#nameServerDialogStatus").textContent = current ? "当前连接" : "等待输入";
   renderNameServerOptions();
   $("#nameServerDialog").showModal();
-  window.setTimeout(() => $("#nameServerInput").focus(), 0);
+  window.setTimeout(() => $("#nameServerNameInput").focus(), 0);
 }
 
 function closeNameServerDialog() {
@@ -403,14 +482,25 @@ function setNameServerDialogBusy(loading) {
 async function handleNameServerSubmit(event) {
   event.preventDefault();
   const nextNameServer = $("#nameServerInput").value.trim();
-  await switchNameServer(nextNameServer);
+  const nextNameServerName = $("#nameServerNameInput").value.trim();
+  await switchNameServer(nextNameServer, nextNameServerName);
 }
 
 // switchNameServer 复用后端运行时配置接口，弹窗只负责收集和记住用户输入。
-async function switchNameServer(nextNameServer) {
+async function switchNameServer(nextNameServer, nextNameServerName = "") {
   if (!nextNameServer) {
     $("#nameServerSwitchStatus").textContent = "NameServer 必填";
     $("#nameServerDialogStatus").textContent = "NameServer 必填";
+    return;
+  }
+  const previousNameServer = currentNameServer();
+  if (nextNameServer === previousNameServer) {
+    rememberNameServerEnvironment(nextNameServer, nextNameServerName, configuredNameServers());
+    renderCurrentNameServerLabel();
+    renderNameServerOptions();
+    $("#nameServerSwitchStatus").textContent = "已保存";
+    $("#nameServerDialogStatus").textContent = "已保存";
+    closeNameServerDialog();
     return;
   }
   setNameServerDialogBusy(true);
@@ -422,7 +512,10 @@ async function switchNameServer(nextNameServer) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ nameServer: nextNameServer })
     });
-    rememberNameServer(nextNameServer);
+    rememberNameServerEnvironment(nextNameServer, nextNameServerName, [
+      previousNameServer,
+      ...(payload.data?.availableNameServers || [])
+    ]);
     renderConfig(payload);
     resetRuntimeSelections();
     $("#nameServerSwitchStatus").textContent = "已切换";

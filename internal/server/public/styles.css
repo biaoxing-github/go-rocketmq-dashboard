@@ -247,6 +247,12 @@ a {
   font-size: 12px;
 }
 
+.nameserver-field-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.2fr);
+  gap: 12px;
+}
+
 .nameserver-field {
   display: grid;
   gap: 7px;
@@ -299,11 +305,28 @@ a {
   text-align: left;
 }
 
-.nameserver-choice span {
+.nameserver-choice-main {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.nameserver-choice-main strong {
   min-width: 0;
   overflow-wrap: anywhere;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.2;
+}
+
+.nameserver-choice-main em {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--muted);
   font-family: Consolas, "Cascadia Code", monospace;
   font-size: 12px;
+  font-style: normal;
+  line-height: 1.25;
 }
 
 .nameserver-choice small {
@@ -1818,6 +1841,10 @@ td {
 
   .nameserver-dialog-form {
     padding: 18px;
+  }
+
+  .nameserver-field-grid {
+    grid-template-columns: 1fr;
   }
 
   .nameserver-dialog-head,

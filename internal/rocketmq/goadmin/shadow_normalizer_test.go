@@ -1,6 +1,7 @@
 package goadmin
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -62,10 +63,10 @@ func TestComposeShadowNormalizersNilAndEmptyKeepOutput(t *testing.T) {
 		Stderr: "stderr\n",
 	}
 
-	if output := ComposeShadowNormalizers()(input); output != input {
+	if output := ComposeShadowNormalizers()(input); !reflect.DeepEqual(output, input) {
 		t.Fatalf("expected empty normalizer chain to keep output, got %#v", output)
 	}
-	if output := ComposeShadowNormalizers(nil)(input); output != input {
+	if output := ComposeShadowNormalizers(nil)(input); !reflect.DeepEqual(output, input) {
 		t.Fatalf("expected nil normalizer to keep output, got %#v", output)
 	}
 }
@@ -122,5 +123,63 @@ func TestDefaultM6ShadowNormalizerRemovesCommonDynamicFields(t *testing.T) {
 	}
 	if output.Stderr != expectedStderr {
 		t.Fatalf("unexpected normalized stderr\nexpected=%q\nactual=%q", expectedStderr, output.Stderr)
+	}
+}
+
+func TestDefaultM6ShadowNormalizerRemovesExportMetadataArtifactTime(t *testing.T) {
+	normalizer := DefaultM6ShadowNormalizer()
+
+	output := normalizer(ShadowOutput{
+		Artifacts: map[string]string{
+			"metadata.json": "{\n\t\"exportTime\":1782480000123,\n\t\"topicConfigTable\":{}\n}",
+		},
+	})
+
+	expected := "{\n\t\"exportTime\":<dynamic>,\n\t\"topicConfigTable\":{}\n}"
+	if output.Artifacts["metadata.json"] != expected {
+		t.Fatalf("unexpected normalized metadata artifact\nexpected=%q\nactual=%q", expected, output.Artifacts["metadata.json"])
+	}
+}
+
+func TestNormalizeBrokerStatusShadowOutputKeepsOnlyRuntimeFieldsDynamic(t *testing.T) {
+	output := normalizeBrokerStatusShadowOutput(ShadowOutput{
+		Stdout: "putTps                          : 1.0 2.0 3.0\n" +
+			"runtime                         : 120 seconds\n" +
+			"192.168.0.10:10911        getTransferredTps              : 4.0 5.0 6.0\n" +
+			"timerReadBehind                 : 1\n" +
+			"brokerVersionDesc               : V5_3_2\n",
+		Stderr: "brokerStatus warn 123\n",
+	})
+
+	expectedStdout := "putTps                          : <dynamic>\n" +
+		"runtime                         : <dynamic>\n" +
+		"192.168.0.10:10911        getTransferredTps              : <dynamic>\n" +
+		"timerReadBehind                 : <dynamic>\n" +
+		"brokerVersionDesc               : V5_3_2\n"
+	if output.Stdout != expectedStdout {
+		t.Fatalf("unexpected brokerStatus normalized stdout\nexpected=%q\nactual=%q", expectedStdout, output.Stdout)
+	}
+	if output.Stderr != "brokerStatus warn 123\n" {
+		t.Fatalf("expected brokerStatus normalizer to keep stderr unchanged, got %q", output.Stderr)
+	}
+}
+
+func TestNormalizeShadowOutputForProducerHidesLastUpdateTimestamp(t *testing.T) {
+	first := normalizeShadowOutputForCommand("producer", shadowComparableOutput{
+		Stdout: "#Group #ClientID #Version #LastUpdate\n" +
+			"GoadminBenchmarkProducer PID_1 JAVA V5_3_2 lastUpdateTimestamp=1782561006123\n",
+	}, DefaultM6ShadowNormalizer())
+	second := normalizeShadowOutputForCommand("producer", shadowComparableOutput{
+		Stdout: "#Group #ClientID #Version #LastUpdate\n" +
+			"GoadminBenchmarkProducer PID_1 JAVA V5_3_2 lastUpdateTimestamp=1782561010456\n",
+	}, DefaultM6ShadowNormalizer())
+
+	expected := "#Group #ClientID #Version #LastUpdate\n" +
+		"GoadminBenchmarkProducer PID_1 JAVA V5_3_2 lastUpdateTimestamp=<dynamic>\n"
+	if first.Stdout != expected {
+		t.Fatalf("unexpected producer normalized stdout\nexpected=%q\nactual=%q", expected, first.Stdout)
+	}
+	if first.Stdout != second.Stdout {
+		t.Fatalf("expected producer timestamps to normalize equally\nfirst=%q\nsecond=%q", first.Stdout, second.Stdout)
 	}
 }

@@ -790,16 +790,22 @@
         <div class="nameserver-dialog-head">
           <div>
             <span class="sidebar-label">Cluster Endpoint</span>
-            <h2 id="nameServerDialogTitle">添加 NameServer</h2>
+            <h2 id="nameServerDialogTitle">NameServer 环境</h2>
           </div>
           <button id="nameServerDialogClose" class="dialog-close" type="button">关闭</button>
         </div>
-        <label class="nameserver-field">
-          <span>NameServer</span>
-          <input id="nameServerInput" name="nameServer" autocomplete="off" placeholder="host:9876" />
-        </label>
+        <div class="nameserver-field-grid">
+          <label class="nameserver-field">
+            <span>环境名称</span>
+            <input id="nameServerNameInput" name="nameServerName" autocomplete="off" placeholder="生产 / 测试 / 本地" />
+          </label>
+          <label class="nameserver-field">
+            <span>NameServer</span>
+            <input id="nameServerInput" name="nameServer" autocomplete="off" placeholder="host:9876" />
+          </label>
+        </div>
         <div class="nameserver-choice-head">
-          <span>已添加</span>
+          <span>环境列表</span>
           <strong id="nameServerChoiceCount">0</strong>
         </div>
         <div id="nameServerChoiceList" class="nameserver-choice-list">
@@ -808,7 +814,7 @@
         <div class="nameserver-dialog-actions">
           <span id="nameServerDialogStatus" class="dialog-status">等待输入</span>
           <button id="nameServerDialogCancel" class="button button-secondary" type="button">取消</button>
-          <button id="nameServerButton" class="button button-primary" type="submit">切换</button>
+          <button id="nameServerButton" class="button button-primary" type="submit">保存并切换</button>
         </div>
       </form>
     </dialog>

@@ -192,7 +192,8 @@ sample_notice_topic broker-a 3 10241 10239 10.0.0.9 2 0 2026-06-06 19:49:00`,
 func TestSearchMessageByKeyUsesNarrowDefaultWindow(t *testing.T) {
 	runner := newRecordingCommandRunner(map[string]string{
 		"queryMsgByKey":     "7F00000100002A9F00000000000123AB 3 10240\n",
-		"queryMsgById":      messageDetailOutputForTest("7F00000100002A9F00000000000123AB", "sample_notice_topic", 3, 10240),
+		"topicStatus":       topicStatusOutputForTest("broker-a", 3, 0, 10241),
+		"queryMsgByOffset":  messageDetailOutputForTest("7F00000100002A9F00000000000123AB", "sample_notice_topic", 3, 10240),
 		"queryMsgTraceById": "",
 	})
 	provider := &MQAdminProvider{NameServer: "127.0.0.1:9876", CommandRunner: runner}
@@ -212,6 +213,87 @@ func TestSearchMessageByKeyUsesNarrowDefaultWindow(t *testing.T) {
 	}
 	if maxNum := stringArgForTest(t, call, "-m"); maxNum != "16" {
 		t.Fatalf("expected default key search maxNum=16, got %s in %#v", maxNum, call)
+	}
+}
+
+func TestMessageChainKeyQueryUsesCandidateQueueOffsetForDetail(t *testing.T) {
+	runner := newRecordingCommandRunner(map[string]string{
+		"queryMsgByKey":     "0AE97A6A00017F3CA64A23D49A900003 3 10240\n",
+		"topicStatus":       topicStatusOutputForTest("broker-a", 3, 0, 10241),
+		"queryMsgByOffset":  messageDetailOutputForTest("7F00000100002A9F00000000000123AB", "sample_notice_topic", 3, 10240),
+		"queryMsgTraceById": "",
+	})
+	runner.errByCommand["queryMsgById"] = errors.New("queryMsgById should not be called for key candidate detail")
+	provider := &MQAdminProvider{NameServer: "127.0.0.1:9876", CommandRunner: runner}
+
+	chain, err := provider.MessageChain(context.Background(), MessageQuery{
+		Topic: "sample_notice_topic",
+		Key:   "user-10001",
+	})
+	if err != nil {
+		t.Fatalf("MessageChain returned error: %v", err)
+	}
+	if chain.MessageID != "7F00000100002A9F00000000000123AB" {
+		t.Fatalf("expected detail OffsetID from queryMsgByOffset, got %s", chain.MessageID)
+	}
+	if len(chain.Candidates) != 1 || chain.Candidates[0].MessageID != "0AE97A6A00017F3CA64A23D49A900003" {
+		t.Fatalf("expected original key candidate to remain visible, got %#v", chain.Candidates)
+	}
+	if runner.countCommand("queryMsgById") != 0 {
+		t.Fatalf("expected queryMsgById to be skipped, calls=%#v", runner.commands())
+	}
+	offsetCall := runner.firstCommand("queryMsgByOffset")
+	if broker := stringArgForTest(t, offsetCall, "-b"); broker != "broker-a" {
+		t.Fatalf("expected broker-a from topicStatus, got %s in %#v", broker, offsetCall)
+	}
+	if queue := stringArgForTest(t, offsetCall, "-i"); queue != "3" {
+		t.Fatalf("expected queue 3 from key candidate, got %s in %#v", queue, offsetCall)
+	}
+	if offset := stringArgForTest(t, offsetCall, "-o"); offset != "10240" {
+		t.Fatalf("expected offset 10240 from key candidate, got %s in %#v", offset, offsetCall)
+	}
+}
+
+func TestMessageChainKeyQueryUsesExplicitWindowMaxNumAndTraceTopic(t *testing.T) {
+	runner := newRecordingCommandRunner(map[string]string{
+		"queryMsgByKey":     "7F00000100002A9F00000000000123AB 3 10240\n",
+		"topicStatus":       topicStatusOutputForTest("broker-a", 3, 0, 10241),
+		"queryMsgByOffset":  messageDetailOutputForTest("7F00000100002A9F00000000000123AB", "sample_notice_topic", 3, 10240),
+		"queryMsgTraceById": "",
+		"consumerProgress":  "#Topic              #Broker Name  #QID  #Broker Offset  #Consumer Offset  #Client IP           #Diff  #Inflight  #LastTime\n",
+	})
+	provider := &MQAdminProvider{NameServer: "127.0.0.1:9876", CommandRunner: runner}
+
+	_, err := provider.MessageChain(context.Background(), MessageQuery{
+		Topic:          "sample_notice_topic",
+		Key:            "user-10001",
+		ConsumerGroup:  "CG_NOTICE",
+		TraceTopic:     "RMQ_SYS_TRACE_TOPIC",
+		BeginTimestamp: 0,
+		EndTimestamp:   9223372036854775807,
+		MaxNum:         1,
+	})
+	if err != nil {
+		t.Fatalf("MessageChain returned error: %v", err)
+	}
+
+	keyCall := runner.firstCommand("queryMsgByKey")
+	if begin := stringArgForTest(t, keyCall, "-b"); begin != "0" {
+		t.Fatalf("expected explicit begin timestamp, got %s in %#v", begin, keyCall)
+	}
+	if end := stringArgForTest(t, keyCall, "-e"); end != "9223372036854775807" {
+		t.Fatalf("expected explicit end timestamp, got %s in %#v", end, keyCall)
+	}
+	if maxNum := stringArgForTest(t, keyCall, "-m"); maxNum != "1" {
+		t.Fatalf("expected explicit maxNum=1, got %s in %#v", maxNum, keyCall)
+	}
+	traceCall := runner.firstCommand("queryMsgTraceById")
+	if traceTopic := stringArgForTest(t, traceCall, "-t"); traceTopic != "RMQ_SYS_TRACE_TOPIC" {
+		t.Fatalf("expected explicit trace topic, got %s in %#v", traceTopic, traceCall)
+	}
+	progressCall := runner.firstCommand("consumerProgress")
+	if group := stringArgForTest(t, progressCall, "-g"); group != "CG_NOTICE" {
+		t.Fatalf("expected consumer group fallback, got %s in %#v", group, progressCall)
 	}
 }
 
@@ -375,6 +457,11 @@ Properties:          {MSG_REGION=DefaultRegion, UNIQ_KEY=0AE97A6A00017F3CA64A23D
 Message Body:        {"assessmentId":10001,"status":"created"}`
 }
 
+func topicStatusOutputForTest(brokerName string, queueID int, minOffset int64, maxOffset int64) string {
+	return "#Broker Name                      #QID  #Min Offset           #Max Offset             #Last Updated\n" +
+		brokerName + "                          " + strconv.Itoa(queueID) + "     " + strconv.FormatInt(minOffset, 10) + "                     " + strconv.FormatInt(maxOffset, 10) + "                  2026-06-05 16:20:48,715\n"
+}
+
 func stringArgForTest(t *testing.T, args []string, name string) string {
 	t.Helper()
 	for index, arg := range args {
@@ -436,6 +523,37 @@ func TestCollectTopicMessagesByOffsetReusesPreviousOffsets(t *testing.T) {
 	}
 	if len(result.Rows) != 3 || result.Rows[0].MessageID != "cached-2" {
 		t.Fatalf("expected cached newest message to be reused in rows, got %#v", result.Rows)
+	}
+}
+
+func TestCollectTopicMessagesByOffsetKeepsBrokerQueueFilter(t *testing.T) {
+	query := MessageBrowseQuery{Topic: "codex_topic", BrokerName: "broker-a", QueueID: 1, Limit: 2}
+	rows := []TopicStatusRow{
+		{BrokerName: "broker-a", QueueID: 1, MinOffset: 3, MaxOffset: 6},
+	}
+	fetched := make([]string, 0)
+	result, err := collectTopicMessagesByOffset(context.Background(), query, rows, TopicMessages{}, func(ctx context.Context, topic string, brokerName string, queueID int, offset int64) (MessageDetail, error) {
+		fetched = append(fetched, brokerName+"/"+strconv.Itoa(queueID)+"/"+strconv.FormatInt(offset, 10))
+		return MessageDetail{
+			MessageID:      "msg-" + strconv.FormatInt(offset, 10),
+			Topic:          topic,
+			BrokerName:     brokerName,
+			QueueID:        queueID,
+			QueueOffset:    offset,
+			StoreTimestamp: 100 + offset,
+		}, nil
+	})
+	if err != nil {
+		t.Fatalf("collect messages: %v", err)
+	}
+	if !reflect.DeepEqual(fetched, []string{"broker-a/1/5", "broker-a/1/4"}) {
+		t.Fatalf("expected only the filtered queue latest offsets, got %#v", fetched)
+	}
+	if result.BrokerName != "broker-a" || result.QueueID != 1 || result.Limit != 2 {
+		t.Fatalf("expected result to keep browse filter, got %#v", result)
+	}
+	if len(result.Rows) != 2 || result.Rows[0].QueueID != 1 || result.Rows[1].QueueOffset != 4 {
+		t.Fatalf("unexpected filtered rows: %#v", result.Rows)
 	}
 }
 

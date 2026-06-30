@@ -1,6 +1,7 @@
 package goadmin
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -12,11 +13,67 @@ func TestDefaultM6ShadowPlanIsValid(t *testing.T) {
 	}
 
 	required := map[string]bool{
-		"command-smoke":        false,
-		"known-message":        false,
-		"recent-topic-message": false,
-		"message-chain-cold":   false,
-		"message-chain-warm":   false,
+		"command-smoke":                        false,
+		"known-message":                        false,
+		"unique-key-message":                   false,
+		"query-msg-trace-by-id":                false,
+		"offset-message":                       false,
+		"recent-topic-message":                 false,
+		"topic-status":                         false,
+		"topic-route":                          false,
+		"topic-cluster-list":                   false,
+		"topic-list":                           false,
+		"cluster-list":                         false,
+		"cluster-list-more-stats":              false,
+		"stats-all":                            false,
+		"consumer-progress":                    false,
+		"consumer-connection":                  false,
+		"list-user":                            false,
+		"get-user":                             false,
+		"list-acl":                             false,
+		"get-acl":                              false,
+		"controller-metadata":                  false,
+		"controller-config":                    false,
+		"get-broker-config":                    false,
+		"get-broker-config-c":                  false,
+		"get-namesrv-config":                   false,
+		"get-consumer-config":                  false,
+		"get-cold-ctr-info":                    false,
+		"get-cold-ctr-info-c":                  false,
+		"allocate-mq":                          false,
+		"broker-status":                        false,
+		"broker-status-c":                      false,
+		"print-message":                        false,
+		"print-message-queue":                  false,
+		"consume-message":                      false,
+		"query-consume-queue":                  false,
+		"check-rocksdb-cq-write-progress":      false,
+		"dump-compaction-log":                  false,
+		"export-pop-record":                    false,
+		"export-pop-record-b":                  false,
+		"producer":                             false,
+		"producer-connection":                  false,
+		"rocksdb-config-to-json-local":         false,
+		"rocksdb-config-to-json-groups-local":  false,
+		"rocksdb-config-to-json-offsets-local": false,
+		"export-metadata-in-rocksdb-local":     false,
+		"broker-consume-stats":                 false,
+		"ha-status":                            false,
+		"ha-status-c":                          false,
+		"get-broker-epoch":                     false,
+		"get-broker-epoch-c":                   false,
+		"get-sync-state-set":                   false,
+		"get-sync-state-set-c":                 false,
+		"export-configs":                       false,
+		"export-metadata":                      false,
+		"export-metrics":                       false,
+		"wipe-write-perm":                      false,
+		"add-write-perm":                       false,
+		"update-kv-config":                     false,
+		"delete-kv-config":                     false,
+		"update-order-conf-get":                false,
+		"message-chain-cold":                   false,
+		"message-chain-warm":                   false,
 	}
 	for _, sample := range samples {
 		if _, ok := required[sample.Name]; ok {
@@ -27,6 +84,61 @@ func TestDefaultM6ShadowPlanIsValid(t *testing.T) {
 		if !found {
 			t.Fatalf("expected default plan to include %s, got %#v", name, samples)
 		}
+	}
+}
+
+func TestDefaultM6ShadowPlanSerializesFixedBodyMessageTargets(t *testing.T) {
+	required := map[string]string{
+		"known-message":      "queryMsgById",
+		"unique-key-message": "queryMsgByUniqueKey",
+		"offset-message":     "queryMsgByOffset",
+		"export-configs":     "exportConfigs",
+		"export-metadata":    "exportMetadata",
+		"export-metrics":     "exportMetrics",
+	}
+	for _, sample := range DefaultM6ShadowPlan() {
+		command, ok := required[sample.Name]
+		if !ok {
+			continue
+		}
+		if !sample.SerialTargets {
+			t.Fatalf("%s must serialize targets because %s writes fixed body files", sample.Name, command)
+		}
+		if !strings.Contains(sample.Notes, "串行") {
+			t.Fatalf("%s notes should explain serial target requirement, got %q", sample.Name, sample.Notes)
+		}
+		delete(required, sample.Name)
+	}
+	if len(required) != 0 {
+		t.Fatalf("expected default M6 plan to contain fixed-body samples, missing=%#v", required)
+	}
+}
+
+func TestDefaultM6ShadowPlanSerializesMutationTargets(t *testing.T) {
+	required := map[string]struct {
+		command   string
+		noteToken string
+	}{
+		"wipe-write-perm":  {command: "wipeWritePerm", noteToken: "恢复"},
+		"add-write-perm":   {command: "addWritePerm", noteToken: "恢复"},
+		"update-kv-config": {command: "updateKvConfig", noteToken: "清理"},
+		"delete-kv-config": {command: "deleteKvConfig", noteToken: "预置"},
+	}
+	for _, sample := range DefaultM6ShadowPlan() {
+		expectation, ok := required[sample.Name]
+		if !ok {
+			continue
+		}
+		if !sample.SerialTargets {
+			t.Fatalf("%s must serialize targets because %s mutates shared RocketMQ state", sample.Name, expectation.command)
+		}
+		if !strings.Contains(sample.Notes, expectation.noteToken) {
+			t.Fatalf("%s notes should explain mutation cleanup with %q, got %q", sample.Name, expectation.noteToken, sample.Notes)
+		}
+		delete(required, sample.Name)
+	}
+	if len(required) != 0 {
+		t.Fatalf("expected default M6 plan to contain mutation samples, missing=%#v", required)
 	}
 }
 
@@ -95,18 +207,70 @@ func TestApplyShadowFixtureOverridesMarksConcreteSamplesExecutable(t *testing.T)
 
 	plan := PlanShadowBatch(samples)
 
-	if plan.ExecutableSamples != 2 || plan.SkippedSamples != 3 {
-		t.Fatalf("expected 2 executable and 3 skipped samples, got executable=%d skipped=%d plan=%#v",
+	if plan.ExecutableSamples != 2 || plan.SkippedSamples != 59 {
+		t.Fatalf("expected 2 executable and 59 skipped samples, got executable=%d skipped=%d plan=%#v",
 			plan.ExecutableSamples, plan.SkippedSamples, plan)
 	}
 	if plan.Executable[0].Name != "known-message" {
 		t.Fatalf("expected known-message executable sample first, got %#v", plan.Executable)
+	}
+	if !plan.Executable[0].SerialTargets {
+		t.Fatalf("expected known-message fixture to preserve SerialTargets")
 	}
 	if strings.Contains(strings.Join(plan.Executable[0].Args, " "), "<known-message-id>") {
 		t.Fatalf("expected known-message placeholder to be replaced, got %#v", plan.Executable[0].Args)
 	}
 	if DefaultM6ShadowPlan()[1].Args[2] != "<known-message-id>" {
 		t.Fatalf("expected default plan to remain unchanged")
+	}
+}
+
+func TestApplyShadowFixtureOverridesCanForceSerialTargetsPerFixture(t *testing.T) {
+	var overrides ShadowFixtureOverrides
+	if err := json.Unmarshal([]byte(`{"samples":[{"name":"command-smoke","args":["exportConfigs","-c","DefaultCluster","-f","/tmp/m6-command-smoke/exportConfigs"],"serialTargets":true}]}`), &overrides); err != nil {
+		t.Fatalf("unmarshal fixture overrides: %v", err)
+	}
+
+	samples, err := ApplyShadowFixtureOverrides(DefaultM6ShadowPlan(), overrides)
+	if err != nil {
+		t.Fatalf("apply fixture overrides: %v", err)
+	}
+	plan := PlanShadowBatch(samples)
+
+	if plan.ExecutableSamples != 1 {
+		t.Fatalf("expected one executable sample, got %#v", plan)
+	}
+	if plan.Executable[0].Name != "command-smoke" || !plan.Executable[0].SerialTargets {
+		t.Fatalf("expected command-smoke fixture to force serial targets, got %#v", plan.Executable[0])
+	}
+	if DefaultM6ShadowPlan()[0].SerialTargets {
+		t.Fatalf("expected default command-smoke sample to remain concurrent")
+	}
+}
+
+func TestApplyShadowFixtureOverridesExpandsRepeatedFixtures(t *testing.T) {
+	var overrides ShadowFixtureOverrides
+	if err := json.Unmarshal([]byte(`{"samples":[{"name":"message-chain-warm","args":["messageChain","-t","GoadminM6TraceRichTest","-i","AC18000300002A9F000000001AD666AF","-g","GoadminM6TraceRichGroup","--traceTopic","RMQ_SYS_TRACE_TOPIC"],"repeat":20}]}`), &overrides); err != nil {
+		t.Fatalf("unmarshal fixture overrides: %v", err)
+	}
+
+	samples, err := ApplyShadowFixtureOverrides(DefaultM6ShadowPlan(), overrides)
+	if err != nil {
+		t.Fatalf("apply fixture overrides: %v", err)
+	}
+	plan := PlanShadowBatch(samples)
+
+	if plan.ExecutableSamples != 20 || plan.SkippedSamples != 60 {
+		t.Fatalf("expected repeat fixture to expand to 20 executable samples and 60 skipped samples, got executable=%d skipped=%d plan=%#v",
+			plan.ExecutableSamples, plan.SkippedSamples, plan)
+	}
+	for index, sample := range plan.Executable {
+		if sample.Name != "message-chain-warm" {
+			t.Fatalf("expected repeated sample %d to keep name message-chain-warm, got %#v", index, sample)
+		}
+		if strings.Contains(strings.Join(sample.Args, " "), "<") {
+			t.Fatalf("expected repeated sample %d to be concrete, got %#v", index, sample.Args)
+		}
 	}
 }
 

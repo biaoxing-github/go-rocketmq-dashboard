@@ -158,7 +158,7 @@ func runConcreteShadowSamples(ctx context.Context, batch ShadowBatch, results []
 }
 
 func runShadowBatchSample(ctx context.Context, batch ShadowBatch, sample ShadowSample) ShadowResult {
-	return RunShadowCompare(ctx, sample.Args, batch.Primary, shadowTargetsForSample(batch.Targets, sample), batch.Normalizer)
+	return RunShadowCompareWithOptions(ctx, sample.Args, batch.Primary, shadowTargetsForSample(batch.Targets, sample), batch.Normalizer, sample.SerialTargets)
 }
 
 func shadowSampleHasPlaceholder(sample ShadowSample) bool {

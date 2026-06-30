@@ -421,11 +421,12 @@ func TestMarshalShadowBatchPlanJSONLineRecordsDryRunPlan(t *testing.T) {
 			MinSamples: 1,
 		},
 		{
-			Name:       "known-message",
-			Args:       []string{"queryMsgById", "-i", "<message-id>"},
-			Providers:  []ShadowProviderMode{ShadowProviderOfficial, ShadowProviderSidecar, ShadowProviderNative, ShadowProviderAuto},
-			MinSamples: 93,
-			Notes:      "needs real message fixture",
+			Name:          "known-message",
+			Args:          []string{"queryMsgById", "-i", "<message-id>"},
+			Providers:     []ShadowProviderMode{ShadowProviderOfficial, ShadowProviderSidecar, ShadowProviderNative, ShadowProviderAuto},
+			SerialTargets: true,
+			MinSamples:    93,
+			Notes:         "needs real message fixture",
 		},
 	})
 
@@ -445,6 +446,7 @@ func TestMarshalShadowBatchPlanJSONLineRecordsDryRunPlan(t *testing.T) {
 		`"name":"topic-list"`,
 		`"args":["topicList","-n","127.0.0.1:9876"]`,
 		`"providers":["official","native"]`,
+		`"serial_targets":true`,
 		`"placeholder":"<message-id>"`,
 		`"reason":"sample \"known-message\" contains placeholder \"<message-id>\""`,
 	} {
@@ -480,10 +482,11 @@ func TestNewShadowBatchPlanReportCopiesPlanAndErrors(t *testing.T) {
 		}},
 		Skipped: []ShadowSkippedSample{{
 			Sample: ShadowSample{
-				Name:       "known-message",
-				Args:       []string{"queryMsgById", "-i", "<message-id>"},
-				Providers:  []ShadowProviderMode{ShadowProviderOfficial, ShadowProviderNative},
-				MinSamples: 93,
+				Name:          "known-message",
+				Args:          []string{"queryMsgById", "-i", "<message-id>"},
+				Providers:     []ShadowProviderMode{ShadowProviderOfficial, ShadowProviderNative},
+				SerialTargets: true,
+				MinSamples:    93,
 			},
 			Placeholder: "<message-id>",
 			Reason:      "sample \"known-message\" contains placeholder \"<message-id>\"",
@@ -503,6 +506,9 @@ func TestNewShadowBatchPlanReportCopiesPlanAndErrors(t *testing.T) {
 	}
 	if report.SkippedSamples[0].Sample.Providers[1] != ShadowProviderNative {
 		t.Fatalf("expected skipped sample providers to be deep-copied, got %#v", report.SkippedSamples[0].Sample.Providers)
+	}
+	if !report.SkippedSamples[0].Sample.SerialTargets {
+		t.Fatalf("expected skipped sample serial target flag to be copied")
 	}
 	if len(report.Errors) != 1 || report.Errors[0] != "invalid plan\nsecond line" {
 		t.Fatalf("expected error text to be copied, got %#v", report.Errors)

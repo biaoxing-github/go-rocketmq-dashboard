@@ -32,6 +32,7 @@ type fakeProvider struct {
 	lastTopicDelete       rocketmq.TopicDeleteRequest
 	lastMessageSend       rocketmq.TopicMessageSendRequest
 	lastOffsetReset       rocketmq.ConsumerOffsetResetRequest
+	lastTopicMessageQuery rocketmq.MessageBrowseQuery
 	lastMessageChainQuery rocketmq.MessageQuery
 }
 
@@ -122,6 +123,11 @@ func (p *fakeProvider) TopicStatus(ctx context.Context, topic string) (rocketmq.
 
 func (p *fakeProvider) TopicMessages(ctx context.Context, query rocketmq.MessageBrowseQuery) (rocketmq.TopicMessages, error) {
 	p.topicMessageCalls++
+	p.lastTopicMessageQuery = query
+	queueID := 0
+	if query.QueueID >= 0 {
+		queueID = query.QueueID
+	}
 	return rocketmq.TopicMessages{
 		Topic:          query.Topic,
 		BrokerName:     query.BrokerName,
@@ -135,7 +141,7 @@ func (p *fakeProvider) TopicMessages(ctx context.Context, query rocketmq.Message
 				BrokerName:     "broker-a",
 				Keys:           []string{"order_created"},
 				StoreTimestamp: 1717651200000,
-				QueueID:        0,
+				QueueID:        queueID,
 				QueueOffset:    1,
 				StoreHost:      "127.0.0.1:10911",
 				BodyPreview:    "{\"event\":\"created\"}",
@@ -413,6 +419,42 @@ func TestRefreshEndpointForcesSnapshotsBeforeTTLExpires(t *testing.T) {
 	waitForProviderCalls(t, provider, 2, 2, 2)
 }
 
+// TestRefreshEndpointDoesNotDuplicateRunningSnapshots 验证手动刷新不会为正在执行的核心快照叠加后台任务。
+func TestRefreshEndpointDoesNotDuplicateRunningSnapshots(t *testing.T) {
+	provider := &blockingCoreProvider{
+		clusterStarted:  make(chan struct{}),
+		topicStarted:    make(chan struct{}),
+		consumerStarted: make(chan struct{}),
+		release:         make(chan struct{}),
+	}
+	app := New(AppConfig{Provider: provider, ClusterCacheTTL: time.Hour})
+	waitForStarted(t, provider.clusterStarted, "cluster snapshot")
+	waitForStarted(t, provider.topicStarted, "topic snapshot")
+	waitForStarted(t, provider.consumerStarted, "consumer snapshot")
+
+	recorder := httptest.NewRecorder()
+	app.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/api/refresh", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+
+	var payload responsePayload[refreshTriggerPayload]
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if payload.Data.Clusters || payload.Data.Topics || payload.Data.Consumers {
+		t.Fatalf("expected running snapshots to reject duplicate refreshes, got %#v", payload.Data)
+	}
+	if clusters, topics, consumers := provider.coreCallCounts(); clusters != 1 || topics != 1 || consumers != 1 {
+		t.Fatalf("expected one running refresh per core snapshot, got clusters=%d topics=%d consumers=%d", clusters, topics, consumers)
+	}
+
+	close(provider.release)
+	waitForSnapshot(t, app.clusterSnapshot)
+	waitForSnapshot(t, app.topicSnapshot)
+	waitForSnapshot(t, app.consumerSnapshot)
+}
+
 func TestTopicRouteEndpointReturnsBrokerRouting(t *testing.T) {
 	provider := &fakeProvider{}
 	app := New(AppConfig{Provider: provider, ClusterCacheTTL: time.Second})
@@ -509,6 +551,60 @@ func TestTopicMessagesEndpointReturnsRecentMessagesAndUsesCache(t *testing.T) {
 	}
 	if provider.topicMessageCalls != 1 {
 		t.Fatalf("expected cached topic messages to avoid second provider call, got %d calls", provider.topicMessageCalls)
+	}
+}
+
+func TestTopicMessagesEndpointPassesBrokerQueueFilterAndUsesSeparateCache(t *testing.T) {
+	provider := &fakeProvider{}
+	app := New(AppConfig{Provider: provider, ClusterCacheTTL: time.Hour})
+
+	unfiltered := httptest.NewRequest(http.MethodGet, "/api/topic-messages?topic=sample_order_events_topic&limit=5", nil)
+	unfilteredRecorder := httptest.NewRecorder()
+	app.ServeHTTP(unfilteredRecorder, unfiltered)
+	if unfilteredRecorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", unfilteredRecorder.Code, unfilteredRecorder.Body.String())
+	}
+	unfilteredKey, err := messageBrowseCacheKey(rocketmq.MessageBrowseQuery{Topic: "sample_order_events_topic", QueueID: -1, Limit: 5})
+	if err != nil {
+		t.Fatalf("build unfiltered cache key: %v", err)
+	}
+	waitForSnapshot(t, app.topicMessageSnapshots.snapshot(unfilteredKey))
+
+	filtered := httptest.NewRequest(http.MethodGet, "/api/topic-messages?topic=sample_order_events_topic&brokerName=broker-a&queueId=1&limit=5", nil)
+	filteredRecorder := httptest.NewRecorder()
+	app.ServeHTTP(filteredRecorder, filtered)
+	if filteredRecorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", filteredRecorder.Code, filteredRecorder.Body.String())
+	}
+	filteredKey, err := messageBrowseCacheKey(rocketmq.MessageBrowseQuery{Topic: "sample_order_events_topic", BrokerName: "broker-a", QueueID: 1, Limit: 5})
+	if err != nil {
+		t.Fatalf("build filtered cache key: %v", err)
+	}
+	waitForSnapshot(t, app.topicMessageSnapshots.snapshot(filteredKey))
+	if provider.topicMessageCalls != 2 {
+		t.Fatalf("expected filtered browse to use an independent snapshot, got %d provider calls", provider.topicMessageCalls)
+	}
+	if provider.lastTopicMessageQuery.Topic != "sample_order_events_topic" ||
+		provider.lastTopicMessageQuery.BrokerName != "broker-a" ||
+		provider.lastTopicMessageQuery.QueueID != 1 ||
+		provider.lastTopicMessageQuery.Limit != 5 {
+		t.Fatalf("unexpected filtered query: %#v", provider.lastTopicMessageQuery)
+	}
+
+	cached := httptest.NewRecorder()
+	app.ServeHTTP(cached, filtered)
+	var payload responsePayload[rocketmq.TopicMessages]
+	if err := json.Unmarshal(cached.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if !payload.HasData || !payload.CacheHit || payload.Data.BrokerName != "broker-a" || payload.Data.QueueID != 1 || payload.Data.Limit != 5 {
+		t.Fatalf("expected filtered cached payload, got %#v", payload)
+	}
+	if len(payload.Data.Rows) != 1 || payload.Data.Rows[0].QueueID != 1 {
+		t.Fatalf("expected filtered row to keep queue id, got %#v", payload.Data.Rows)
+	}
+	if provider.topicMessageCalls != 2 {
+		t.Fatalf("expected cached filtered browse to avoid provider call, got %d calls", provider.topicMessageCalls)
 	}
 }
 
@@ -646,6 +742,36 @@ func TestMessageChainEndpointParsesQueueLocationAndTimeWindow(t *testing.T) {
 	}
 }
 
+func TestMessageChainEndpointParsesKeyConsumerTraceAndMaxNum(t *testing.T) {
+	provider := &fakeProvider{}
+	app := New(AppConfig{Provider: provider, ClusterCacheTTL: time.Second})
+	url := "/api/message-chain?topic=sample_notice_topic&key=user-10001&consumerGroup=CG_NOTICE&traceTopic=RMQ_SYS_TRACE_TOPIC&beginTimestamp=0&endTimestamp=9223372036854775807&maxNum=1"
+
+	recorder := httptest.NewRecorder()
+	app.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, url, nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	query := rocketmq.MessageQuery{
+		Topic:          "sample_notice_topic",
+		Key:            "user-10001",
+		ConsumerGroup:  "CG_NOTICE",
+		TraceTopic:     "RMQ_SYS_TRACE_TOPIC",
+		BeginTimestamp: 0,
+		EndTimestamp:   9223372036854775807,
+		MaxNum:         1,
+	}
+	key, err := messageChainCacheKey(query)
+	if err != nil {
+		t.Fatalf("build message chain cache key: %v", err)
+	}
+	waitForSnapshot(t, app.messageChainSnapshots.snapshot(key))
+
+	if provider.lastMessageChainQuery != query {
+		t.Fatalf("unexpected provider query\nexpected=%#v\nactual=%#v", query, provider.lastMessageChainQuery)
+	}
+}
+
 func TestTopicsEndpointReturnsClassifiedTopics(t *testing.T) {
 	provider := &fakeProvider{}
 	app := New(AppConfig{Provider: provider, ClusterCacheTTL: time.Second})
@@ -704,6 +830,28 @@ func TestTopicUpsertEndpointCallsProviderAndRefreshesTopics(t *testing.T) {
 	if payload.Data.Topic != "codex_topic" || payload.Data.Operation != "upsertTopic" {
 		t.Fatalf("unexpected mutation result: %#v", payload.Data)
 	}
+}
+
+// TestTopicPutEndpointCallsProviderAndRefreshesTopics 验证 PUT /api/topics 与 POST 共用 upsert 流程。
+func TestTopicPutEndpointCallsProviderAndRefreshesTopics(t *testing.T) {
+	provider := &fakeProvider{}
+	app := New(AppConfig{Provider: provider, ClusterCacheTTL: time.Hour})
+	waitForSnapshot(t, app.topicSnapshot)
+
+	body := bytes.NewBufferString(`{"topic":"codex_topic","clusterName":"DefaultCluster","readQueueNums":4,"writeQueueNums":4,"perm":6}`)
+	recorder := httptest.NewRecorder()
+	app.ServeHTTP(recorder, httptest.NewRequest(http.MethodPut, "/api/topics", body))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+
+	if provider.upsertTopicCalls != 1 {
+		t.Fatalf("expected provider upsert once, got %d", provider.upsertTopicCalls)
+	}
+	if provider.lastTopicMutation.Topic != "codex_topic" || provider.lastTopicMutation.ClusterName != "DefaultCluster" {
+		t.Fatalf("unexpected topic mutation: %#v", provider.lastTopicMutation)
+	}
+	waitForTopicCalls(t, provider, 2)
 }
 
 func TestTopicDeleteEndpointCallsProviderAndRefreshesTopics(t *testing.T) {
@@ -812,6 +960,116 @@ func TestConsumerOffsetResetEndpointCallsProvider(t *testing.T) {
 	}
 	if payload.Data.Operation != "resetOffsetByTime" || payload.Data.Timestamp != "now" {
 		t.Fatalf("unexpected reset result: %#v", payload.Data)
+	}
+}
+
+func TestConsumerOffsetResetEndpointInvalidatesConsumerDetailAndRefreshesConsumers(t *testing.T) {
+	provider := &fakeProvider{}
+	app := New(AppConfig{Provider: provider, ClusterCacheTTL: time.Hour})
+	waitForSnapshot(t, app.consumerSnapshot)
+	initialConsumerCalls := provider.consumerCalls
+
+	topicDetailRequest := httptest.NewRequest(http.MethodGet, "/api/consumer-detail?group=sample-order-events-consumer&topic=sample_order_events_topic", nil)
+	groupDetailRequest := httptest.NewRequest(http.MethodGet, "/api/consumer-detail?group=sample-order-events-consumer", nil)
+	topicDetailKey := consumerDetailCacheKey("sample-order-events-consumer", "sample_order_events_topic")
+	groupDetailKey := consumerDetailCacheKey("sample-order-events-consumer", "")
+
+	firstTopicDetail := httptest.NewRecorder()
+	app.ServeHTTP(firstTopicDetail, topicDetailRequest)
+	waitForSnapshot(t, app.consumerDetailSnapshots.snapshot(topicDetailKey))
+	firstGroupDetail := httptest.NewRecorder()
+	app.ServeHTTP(firstGroupDetail, groupDetailRequest)
+	waitForSnapshot(t, app.consumerDetailSnapshots.snapshot(groupDetailKey))
+	if provider.consumerDetailCalls != 2 {
+		t.Fatalf("expected two detail cache fills, got %d", provider.consumerDetailCalls)
+	}
+
+	cachedTopicDetail := httptest.NewRecorder()
+	app.ServeHTTP(cachedTopicDetail, topicDetailRequest)
+	cachedGroupDetail := httptest.NewRecorder()
+	app.ServeHTTP(cachedGroupDetail, groupDetailRequest)
+	if provider.consumerDetailCalls != 2 {
+		t.Fatalf("expected cached details to avoid provider calls, got %d", provider.consumerDetailCalls)
+	}
+
+	resetBody := bytes.NewBufferString(`{"group":"sample-order-events-consumer","topic":"sample_order_events_topic","timestamp":"now","force":true}`)
+	reset := httptest.NewRecorder()
+	app.ServeHTTP(reset, httptest.NewRequest(http.MethodPost, "/api/consumer-offset/reset", resetBody))
+	if reset.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", reset.Code, reset.Body.String())
+	}
+	waitForCondition(t, func() bool {
+		return provider.consumerCalls > initialConsumerCalls
+	}, "consumer list refresh after offset reset")
+
+	refreshedTopicDetail := httptest.NewRecorder()
+	app.ServeHTTP(refreshedTopicDetail, topicDetailRequest)
+	waitForSnapshot(t, app.consumerDetailSnapshots.snapshot(topicDetailKey))
+	refreshedGroupDetail := httptest.NewRecorder()
+	app.ServeHTTP(refreshedGroupDetail, groupDetailRequest)
+	waitForSnapshot(t, app.consumerDetailSnapshots.snapshot(groupDetailKey))
+	if provider.consumerDetailCalls != 4 {
+		t.Fatalf("expected reset to invalidate topic and group detail caches, got %d detail calls", provider.consumerDetailCalls)
+	}
+}
+
+func TestConsumerOffsetResetEndpointValidatesAndNormalizesRequest(t *testing.T) {
+	queueID := 0
+	offset := int64(3)
+	validBody := `{"group":" sample-order-events-consumer ","topic":" sample_order_events_topic ","force":false,"brokerAddr":" rmq-goadmin-broker:10911 ","queueId":0,"offset":3}`
+	provider := &fakeProvider{}
+	app := New(AppConfig{Provider: provider, ClusterCacheTTL: time.Hour})
+
+	valid := httptest.NewRecorder()
+	app.ServeHTTP(valid, httptest.NewRequest(http.MethodPost, "/api/consumer-offset/reset", bytes.NewBufferString(validBody)))
+	if valid.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", valid.Code, valid.Body.String())
+	}
+	expected := rocketmq.ConsumerOffsetResetRequest{
+		Group:      "sample-order-events-consumer",
+		Topic:      "sample_order_events_topic",
+		Timestamp:  "now",
+		Force:      false,
+		BrokerAddr: "rmq-goadmin-broker:10911",
+		QueueID:    &queueID,
+		Offset:     &offset,
+	}
+	if provider.lastOffsetReset.Group != expected.Group ||
+		provider.lastOffsetReset.Topic != expected.Topic ||
+		provider.lastOffsetReset.Timestamp != expected.Timestamp ||
+		provider.lastOffsetReset.Force != expected.Force ||
+		provider.lastOffsetReset.BrokerAddr != expected.BrokerAddr ||
+		provider.lastOffsetReset.QueueID == nil ||
+		*provider.lastOffsetReset.QueueID != *expected.QueueID ||
+		provider.lastOffsetReset.Offset == nil ||
+		*provider.lastOffsetReset.Offset != *expected.Offset {
+		t.Fatalf("expected normalized reset request\nexpected=%#v\nactual=%#v", expected, provider.lastOffsetReset)
+	}
+
+	invalidCases := []struct {
+		name string
+		body string
+	}{
+		{name: "malformed JSON", body: `{"group":"codex-group"`},
+		{name: "missing topic", body: `{"group":"codex-group","timestamp":"now"}`},
+		{name: "negative queue", body: `{"group":"codex-group","topic":"codex_topic","queueId":-1,"brokerAddr":"127.0.0.1:10911"}`},
+		{name: "broker without queue", body: `{"group":"codex-group","topic":"codex_topic","brokerAddr":"127.0.0.1:10911"}`},
+		{name: "queue without broker", body: `{"group":"codex-group","topic":"codex_topic","queueId":0}`},
+		{name: "offset without queue target", body: `{"group":"codex-group","topic":"codex_topic","offset":1}`},
+	}
+	for _, tt := range invalidCases {
+		t.Run(tt.name, func(t *testing.T) {
+			provider := &fakeProvider{}
+			app := New(AppConfig{Provider: provider, ClusterCacheTTL: time.Hour})
+			recorder := httptest.NewRecorder()
+			app.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/api/consumer-offset/reset", bytes.NewBufferString(tt.body)))
+			if recorder.Code != http.StatusBadRequest {
+				t.Fatalf("expected 400, got %d body=%s", recorder.Code, recorder.Body.String())
+			}
+			if provider.resetOffsetCalls != 0 {
+				t.Fatalf("expected provider not to be called, got %d", provider.resetOffsetCalls)
+			}
+		})
 	}
 }
 
@@ -1260,6 +1518,55 @@ func (p *blockingProvider) MessageChain(ctx context.Context, query rocketmq.Mess
 	return rocketmq.MessageStatusChain{}, nil
 }
 
+// blockingCoreProvider 让三类核心快照同时阻塞，便于验证 /api/refresh 的去重语义。
+type blockingCoreProvider struct {
+	fakeProvider
+	mu                   sync.Mutex
+	clusterRefreshCalls  int
+	topicRefreshCalls    int
+	consumerRefreshCalls int
+	clusterStarted       chan struct{}
+	topicStarted         chan struct{}
+	consumerStarted      chan struct{}
+	release              chan struct{}
+	clusterOnce          sync.Once
+	topicOnce            sync.Once
+	consumerOnce         sync.Once
+}
+
+func (p *blockingCoreProvider) ClusterList(ctx context.Context) ([]rocketmq.Cluster, error) {
+	p.mu.Lock()
+	p.clusterRefreshCalls++
+	p.mu.Unlock()
+	p.clusterOnce.Do(func() { close(p.clusterStarted) })
+	<-p.release
+	return []rocketmq.Cluster{{Name: "DefaultCluster"}}, nil
+}
+
+func (p *blockingCoreProvider) TopicList(ctx context.Context) ([]rocketmq.Topic, error) {
+	p.mu.Lock()
+	p.topicRefreshCalls++
+	p.mu.Unlock()
+	p.topicOnce.Do(func() { close(p.topicStarted) })
+	<-p.release
+	return []rocketmq.Topic{{Name: "sample_notice_topic", Kind: "normal"}}, nil
+}
+
+func (p *blockingCoreProvider) ConsumerGroups(ctx context.Context) ([]rocketmq.ConsumerGroup, error) {
+	p.mu.Lock()
+	p.consumerRefreshCalls++
+	p.mu.Unlock()
+	p.consumerOnce.Do(func() { close(p.consumerStarted) })
+	<-p.release
+	return []rocketmq.ConsumerGroup{{Name: "sample-order-events-consumer", Count: 1}}, nil
+}
+
+func (p *blockingCoreProvider) coreCallCounts() (int, int, int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.clusterRefreshCalls, p.topicRefreshCalls, p.consumerRefreshCalls
+}
+
 type blockingBrokerStatusProvider struct {
 	fakeProvider
 	started chan struct{}
@@ -1479,6 +1786,28 @@ func waitForTopicCalls(t *testing.T, provider *fakeProvider, topics int) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("topic calls did not reach %d, got %d", topics, provider.topicCalls)
+}
+
+// waitForCondition 轮询异步刷新造成的计数变化，避免固定 sleep 掩盖真实时序。
+func waitForCondition(t *testing.T, condition func() bool, description string) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if condition() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("condition did not become true: %s", description)
+}
+
+func waitForStarted(t *testing.T, started <-chan struct{}, name string) {
+	t.Helper()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatalf("%s did not start", name)
+	}
 }
 
 func waitForMessageChainCalls(t *testing.T, provider *failingMessageChainProvider, calls int) {

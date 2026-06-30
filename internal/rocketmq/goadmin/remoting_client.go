@@ -20,6 +20,7 @@ import (
 	"sync/atomic"
 	"time"
 	"unicode/utf16"
+	"unicode/utf8"
 
 	"github.com/aalhour/rockyardkv"
 	"golang.org/x/text/encoding/htmlindex"
@@ -4408,7 +4409,11 @@ func runNativeCommand(ctx context.Context, args []string, client nativeCommandCl
 		if err != nil {
 			return "", true, err
 		}
-		output, err := formatMessageDetail(detail, bodyFormat)
+		tracks, err := client.MessageTrackDetail(ctx, nameServer, detail)
+		if err != nil {
+			return "", true, err
+		}
+		output, err := formatMessageDetailWithTracks(detail, bodyFormat, true, tracks)
 		if err != nil {
 			return "", true, err
 		}
@@ -5695,6 +5700,8 @@ func (c *Client) exportMetadataByCluster(ctx context.Context, nameServer string,
 	sort.Strings(brokerNames)
 	topics := make(map[string]orderedJSONValue)
 	groups := make(map[string]orderedJSONValue)
+	topicOrder := make([]string, 0)
+	groupOrder := make([]string, 0)
 	for _, brokerName := range brokerNames {
 		brokerData := clusterInfo.BrokerAddrTable[brokerName]
 		masterAddr := strings.TrimSpace(brokerData.BrokerAddrs["0"])
@@ -5713,6 +5720,7 @@ func (c *Client) exportMetadataByCluster(ctx context.Context, nameServer string,
 					continue
 				}
 				topics[pair.Key] = pair.Value
+				topicOrder = append(topicOrder, pair.Key)
 			}
 		}
 		if !options.TopicOnly {
@@ -5727,6 +5735,7 @@ func (c *Client) exportMetadataByCluster(ctx context.Context, nameServer string,
 					continue
 				}
 				groups[pair.Key] = pair.Value
+				groupOrder = append(groupOrder, pair.Key)
 			}
 		}
 	}
@@ -5736,8 +5745,8 @@ func (c *Client) exportMetadataByCluster(ctx context.Context, nameServer string,
 	}
 	data := exportMetadataData{
 		ExportTime:         now,
-		TopicConfigs:       exportMetadataTopicConfigsFromMap(topics),
-		SubscriptionGroups: exportMetadataPairsFromMap(groups),
+		TopicConfigs:       exportMetadataTopicConfigsFromOrderedKeys(topics, topicOrder),
+		SubscriptionGroups: exportMetadataPairsFromOrderedKeys(groups, groupOrder),
 		IncludeTopics:      !options.SubscriptionGroupOnly,
 		IncludeGroups:      !options.TopicOnly,
 	}
@@ -15416,7 +15425,17 @@ func decodeBodyByCharset(body []byte, charset string) (string, error) {
 	normalized := strings.ToUpper(strings.ReplaceAll(label, "_", "-"))
 	switch normalized {
 	case "UTF-8", "UTF8":
-		return string(body), nil
+		if utf8.Valid(body) {
+			return string(body), nil
+		}
+		var builder strings.Builder
+		builder.Grow(len(body))
+		for len(body) > 0 {
+			r, width := utf8.DecodeRune(body)
+			builder.WriteRune(r)
+			body = body[width:]
+		}
+		return builder.String(), nil
 	case "US-ASCII", "ASCII":
 		for _, item := range body {
 			if item > 127 {
@@ -16858,9 +16877,33 @@ func exportMetadataTopicConfigPairs(configs []exportMetadataTopicConfig) []order
 }
 
 func exportMetadataTopicConfigsFromMap(values map[string]orderedJSONValue) []exportMetadataTopicConfig {
-	configs := make([]exportMetadataTopicConfig, 0, len(values))
+	pairs := make([]orderedJSONPair, 0, len(values))
 	for name, value := range values {
-		configs = append(configs, exportMetadataTopicConfig{Name: name, Value: value})
+		pairs = append(pairs, orderedJSONPair{Key: name, Value: value})
+	}
+	return exportMetadataTopicConfigsFromOrderedPairs(pairs)
+}
+
+func exportMetadataTopicConfigsFromOrderedKeys(values map[string]orderedJSONValue, keys []string) []exportMetadataTopicConfig {
+	pairs := orderedJSONPairsFromKeys(values, keys)
+	return exportMetadataTopicConfigsFromOrderedPairs(pairs)
+}
+
+// exportMetadataTopicConfigsFromOrderedPairs 复现官方先 put HashMap、再由 fastjson 遍历 HashMap 的顺序。
+// 同一个 bucket 内必须保留首次 put 的链表顺序；Go map 迭代顺序不能参与该语义。
+func exportMetadataTopicConfigsFromOrderedPairs(pairs []orderedJSONPair) []exportMetadataTopicConfig {
+	configs := make([]exportMetadataTopicConfig, 0, len(pairs))
+	indexByName := make(map[string]int, len(pairs))
+	for _, pair := range pairs {
+		if strings.TrimSpace(pair.Key) == "" {
+			continue
+		}
+		if index, ok := indexByName[pair.Key]; ok {
+			configs[index].Value = pair.Value
+			continue
+		}
+		indexByName[pair.Key] = len(configs)
+		configs = append(configs, exportMetadataTopicConfig{Name: pair.Key, Value: pair.Value})
 	}
 	sort.SliceStable(configs, func(left int, right int) bool {
 		capacity := javaHashMapCapacity(len(configs))
@@ -16875,6 +16918,30 @@ func exportMetadataPairsFromMap(values map[string]orderedJSONValue) []orderedJSO
 		pairs = append(pairs, orderedJSONPair{Key: key, Value: value})
 	}
 	return javaHashMapOrderedJSONPairs(pairs)
+}
+
+func exportMetadataPairsFromOrderedKeys(values map[string]orderedJSONValue, keys []string) []orderedJSONPair {
+	return javaHashMapOrderedJSONPairs(orderedJSONPairsFromKeys(values, keys))
+}
+
+func orderedJSONPairsFromKeys(values map[string]orderedJSONValue, keys []string) []orderedJSONPair {
+	pairs := make([]orderedJSONPair, 0, len(keys))
+	seen := make(map[string]struct{}, len(keys))
+	for _, key := range keys {
+		if strings.TrimSpace(key) == "" {
+			continue
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		value, ok := values[key]
+		if !ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		pairs = append(pairs, orderedJSONPair{Key: key, Value: value})
+	}
+	return pairs
 }
 
 func exportMetadataTopicConfigValue(topicName string, queueNums int) orderedJSONValue {
@@ -16933,6 +17000,7 @@ func filterTopicConfigWrapper(value *orderedJSONValue, systemTopics map[string]b
 	if !ok || table.Kind != orderedJSONObject {
 		return
 	}
+	table.Pairs = javaConcurrentHashMapOrderedJSONPairs(table.Pairs)
 	filtered := make([]orderedJSONPair, 0, len(table.Pairs))
 	for _, pair := range table.Pairs {
 		topicName := exportMetadataTopicName(pair)
@@ -16962,6 +17030,7 @@ func filterSubscriptionGroupWrapper(value *orderedJSONValue) {
 	if !ok || table.Kind != orderedJSONObject {
 		return
 	}
+	table.Pairs = javaConcurrentHashMapOrderedJSONPairs(table.Pairs)
 	filtered := make([]orderedJSONPair, 0, len(table.Pairs))
 	for _, pair := range table.Pairs {
 		if isExportMetadataSystemConsumerGroup(pair.Key) {
@@ -18406,7 +18475,7 @@ type orderedJSONValue struct {
 }
 
 func decodeOrderedJSONValue(raw string) (orderedJSONValue, error) {
-	decoder := json.NewDecoder(strings.NewReader(raw))
+	decoder := json.NewDecoder(strings.NewReader(normalizeFastJSONNumericKeys(raw)))
 	decoder.UseNumber()
 	value, err := decodeOrderedJSONToken(decoder)
 	if err != nil {
@@ -18656,6 +18725,22 @@ func javaHashMapOrderedJSONPairs(pairs []orderedJSONPair) []orderedJSONPair {
 	sort.SliceStable(ordered, func(left int, right int) bool {
 		return javaHashMapBucketWithCapacity(ordered[left].Key, capacity) < javaHashMapBucketWithCapacity(ordered[right].Key, capacity)
 	})
+	return ordered
+}
+
+// javaConcurrentHashMapOrderedJSONPairs 复现 RocketMQ wrapper 内 ConcurrentHashMap.entrySet 的遍历顺序。
+func javaConcurrentHashMapOrderedJSONPairs(pairs []orderedJSONPair) []orderedJSONPair {
+	entries := make([]brokerConfigEntry, 0, len(pairs))
+	latestByKey := make(map[string]orderedJSONValue, len(pairs))
+	for _, pair := range pairs {
+		entries = append(entries, brokerConfigEntry{Key: pair.Key, Value: ""})
+		latestByKey[pair.Key] = pair.Value
+	}
+	orderedEntries := javaPropertiesEntrySetOrder(entries)
+	ordered := make([]orderedJSONPair, 0, len(orderedEntries))
+	for _, entry := range orderedEntries {
+		ordered = append(ordered, orderedJSONPair{Key: entry.Key, Value: latestByKey[entry.Key]})
+	}
 	return ordered
 }
 
@@ -19550,10 +19635,11 @@ func decodeBrokerClusterMap(clusterBody []byte) (map[string]string, error) {
 }
 
 func decodeBrokerRuntimeStatsBody(body []byte) (map[string]string, error) {
+	normalized := normalizeFastJSONNumericKeys(string(body))
 	var payload struct {
 		Table map[string]string `json:"table"`
 	}
-	if err := json.Unmarshal(body, &payload); err != nil {
+	if err := json.Unmarshal([]byte(normalized), &payload); err != nil {
 		return nil, fmt.Errorf("解析 broker runtime stats 失败: %w", err)
 	}
 	if payload.Table == nil {

@@ -803,6 +803,7 @@ func (a *App) handleConsumerOffsetReset(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
+	resetRequest = resetRequest.Normalized()
 	provider := a.currentProvider()
 	if provider == nil {
 		writeError(w, http.StatusInternalServerError, errors.New("当前 Provider 不可用"))

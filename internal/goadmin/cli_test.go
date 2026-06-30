@@ -8,7 +8,9 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -147,7 +149,7 @@ func TestRunM6ShadowPlanAppliesFixtureJSONWithoutInvokingRunners(t *testing.T) {
 	if err := json.Unmarshal(bytes.TrimSpace(stdout.Bytes()), &decoded); err != nil {
 		t.Fatalf("expected valid JSON object, got %v", err)
 	}
-	if decoded.Total != 5 || decoded.Executable != 1 || decoded.Skipped != 4 {
+	if decoded.Total != 61 || decoded.Executable != 1 || decoded.Skipped != 60 {
 		t.Fatalf("unexpected plan counts: %#v", decoded)
 	}
 	if len(decoded.ExecutableSamples) != 1 || decoded.ExecutableSamples[0].Name != "known-message" {
@@ -181,7 +183,7 @@ func TestRunM6ShadowPlanReadsFixtureJSONFileAfterPlanFlag(t *testing.T) {
 	if err := json.Unmarshal(bytes.TrimSpace(stdout.Bytes()), &decoded); err != nil {
 		t.Fatalf("expected valid JSON object, got %v", err)
 	}
-	if decoded.Executable != 1 || decoded.Skipped != 4 {
+	if decoded.Total != 61 || decoded.Executable != 1 || decoded.Skipped != 60 {
 		t.Fatalf("expected fixture file to make one sample executable, got %#v", decoded)
 	}
 }
@@ -226,7 +228,7 @@ func TestRunM6ShadowRunExecutesConcreteFixturesAndPrintsSummary(t *testing.T) {
 	if err := json.Unmarshal([]byte(lines[1]), &summary); err != nil {
 		t.Fatalf("expected second line to be summary JSON, got %v", err)
 	}
-	if summary.Executed != 1 || summary.Skipped != 4 || summary.Summary.Mismatches != 0 {
+	if summary.Executed != 1 || summary.Skipped != 60 || summary.Summary.Mismatches != 0 {
 		t.Fatalf("unexpected summary: %#v", summary)
 	}
 	expectedCall := []string{"queryMsgById", "-n", "127.0.0.1:9876", "-i", "AC18000300002A9F0000000000000000"}
@@ -237,6 +239,422 @@ func TestRunM6ShadowRunExecutesConcreteFixturesAndPrintsSummary(t *testing.T) {
 		if !reflect.DeepEqual(call, expectedCall) {
 			t.Fatalf("args mismatch\nexpected=%#v\nactual=%#v", expectedCall, call)
 		}
+	}
+}
+
+func TestRunM6ShadowRunExecutesMessageChainFixture(t *testing.T) {
+	fixtures := `{"samples":[{"name":"message-chain-cold","args":["messageChain","-t","sample_notice_topic","-k","user-10001","-b","0","-e","9223372036854775807","-m","1","--traceTopic","RMQ_SYS_TRACE_TOPIC"]}]}`
+	runner := &mappedRecordingRunner{outputsByCommand: map[string]string{
+		"queryMsgByKey":     "0AE97A6A00017F3CA64A23D49A900003 3 10240\n",
+		"topicStatus":       messageChainTopicStatusOutputForTest("broker-a", 3, 0, 10241),
+		"queryMsgByOffset":  messageChainDetailOutputForTest("7F00000100002A9F00000000000123AB", "sample_notice_topic", 3, 10240),
+		"queryMsgTraceById": "",
+	}}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	code := Run(context.Background(), Options{
+		NameServer: "127.0.0.1:9876",
+		Transport:  "process",
+		Runner:     runner,
+		Stdout:     &stdout,
+		Stderr:     &stderr,
+	}, []string{"--m6-shadow-run", "--m6-shadow-fixtures", fixtures})
+
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d stderr=%q stdout=%q", code, stderr.String(), stdout.String())
+	}
+	lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("expected result line plus summary line, got %d lines: %q", len(lines), stdout.String())
+	}
+	var report nativeadmin.ShadowReport
+	if err := json.Unmarshal([]byte(lines[0]), &report); err != nil {
+		t.Fatalf("expected first line to be shadow report JSON, got %v", err)
+	}
+	if report.Command != "messageChain" || report.Primary.Name != "official" || report.Primary.Error != "" {
+		t.Fatalf("unexpected messageChain report: %#v", report)
+	}
+	for _, diff := range report.Diffs {
+		if !diff.Matched {
+			t.Fatalf("expected matching messageChain diff, got %#v", diff)
+		}
+	}
+	var summary nativeadmin.ShadowBatchSummaryReport
+	if err := json.Unmarshal([]byte(lines[1]), &summary); err != nil {
+		t.Fatalf("expected summary JSON, got %v", err)
+	}
+	if summary.Executed != 1 || summary.Skipped != 60 || summary.Summary.Mismatches != 0 {
+		t.Fatalf("unexpected messageChain summary: %#v", summary)
+	}
+	if runner.countCommand("messageChain") != 0 {
+		t.Fatalf("messageChain must be expanded before hitting mqadmin runner, calls=%#v", runner.commands())
+	}
+	if report.Primary.StdoutBytes == 0 {
+		t.Fatalf("expected primary messageChain stdout bytes to be recorded, got %#v", report.Primary)
+	}
+	if runner.countCommand("queryMsgByKey") != 4 || runner.countCommand("topicStatus") != 4 || runner.countCommand("queryMsgByOffset") != 4 || runner.countCommand("queryMsgTraceById") != 4 {
+		t.Fatalf("expected four provider paths to execute typed message chain commands, calls=%#v", runner.commands())
+	}
+	keyCall := runner.firstCommand("queryMsgByKey")
+	if begin := stringArgForCLITest(t, keyCall, "-b"); begin != "0" {
+		t.Fatalf("expected explicit begin timestamp, got %s in %#v", begin, keyCall)
+	}
+	if end := stringArgForCLITest(t, keyCall, "-e"); end != "9223372036854775807" {
+		t.Fatalf("expected explicit end timestamp, got %s in %#v", end, keyCall)
+	}
+	if maxNum := stringArgForCLITest(t, keyCall, "-m"); maxNum != "1" {
+		t.Fatalf("expected explicit maxNum=1, got %s in %#v", maxNum, keyCall)
+	}
+	traceCall := runner.firstCommand("queryMsgTraceById")
+	if traceTopic := stringArgForCLITest(t, traceCall, "-t"); traceTopic != "RMQ_SYS_TRACE_TOPIC" {
+		t.Fatalf("expected explicit trace topic, got %s in %#v", traceTopic, traceCall)
+	}
+}
+
+func TestRunM6ShadowRunExecutesMessageChainMessageIDTraceFixture(t *testing.T) {
+	fixtures := `{"samples":[{"name":"message-chain-warm","args":["messageChain","-t","sample_notice_topic","-i","7F00000100002A9F00000000000123AB","-g","CG_NOTICE","-b","0","-e","9223372036854775807","--traceTopic","RMQ_SYS_TRACE_TOPIC"]}]}`
+	runner := &mappedRecordingRunner{
+		outputsByCommand: map[string]string{
+			"queryMsgById":      messageChainDetailOutputForTest("7F00000100002A9F00000000000123AB", "sample_notice_topic", 3, 10240),
+			"queryMsgTraceById": messageChainTraceSuccessOutputForTest("CG_NOTICE"),
+		},
+		errByCommand: map[string]error{
+			"messageChain":     errors.New("messageChain must be expanded before hitting mqadmin runner"),
+			"queryMsgByKey":    errors.New("message id fixture must not search by key"),
+			"topicStatus":      errors.New("message id fixture must not resolve key candidate broker"),
+			"queryMsgByOffset": errors.New("message id fixture must not use offset detail path"),
+			"consumerProgress": errors.New("trace success for the same group must skip consumerProgress"),
+		},
+	}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	code := Run(context.Background(), Options{
+		NameServer: "127.0.0.1:9876",
+		Transport:  "process",
+		Runner:     runner,
+		Stdout:     &stdout,
+		Stderr:     &stderr,
+	}, []string{"--m6-shadow-run", "--m6-shadow-fixtures", fixtures})
+
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d stderr=%q stdout=%q calls=%#v", code, stderr.String(), stdout.String(), runner.commands())
+	}
+	lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("expected result line plus summary line, got %d lines: %q", len(lines), stdout.String())
+	}
+	var report nativeadmin.ShadowReport
+	if err := json.Unmarshal([]byte(lines[0]), &report); err != nil {
+		t.Fatalf("expected first line to be shadow report JSON, got %v", err)
+	}
+	if report.Command != "messageChain" || report.Primary.Name != "official" || report.Primary.Error != "" {
+		t.Fatalf("unexpected messageChain report: %#v", report)
+	}
+	for _, diff := range report.Diffs {
+		if !diff.Matched {
+			t.Fatalf("expected matching messageChain diff, got %#v", diff)
+		}
+	}
+	var summary nativeadmin.ShadowBatchSummaryReport
+	if err := json.Unmarshal([]byte(lines[1]), &summary); err != nil {
+		t.Fatalf("expected summary JSON, got %v", err)
+	}
+	if summary.Executed != 1 || summary.Skipped != 60 || summary.Summary.Mismatches != 0 {
+		t.Fatalf("unexpected messageChain summary: %#v", summary)
+	}
+	if runner.countCommand("queryMsgById") != 4 || runner.countCommand("queryMsgTraceById") != 4 {
+		t.Fatalf("expected four provider paths to execute id detail and trace, calls=%#v", runner.commands())
+	}
+	for _, command := range []string{"messageChain", "queryMsgByKey", "topicStatus", "queryMsgByOffset", "consumerProgress"} {
+		if runner.countCommand(command) != 0 {
+			t.Fatalf("expected %s to stay unused, calls=%#v", command, runner.commands())
+		}
+	}
+	detailCall := runner.firstCommand("queryMsgById")
+	if messageID := stringArgForCLITest(t, detailCall, "-i"); messageID != "7F00000100002A9F00000000000123AB" {
+		t.Fatalf("expected queryMsgById to use supplied OffsetID, got %s in %#v", messageID, detailCall)
+	}
+	traceCall := runner.firstCommand("queryMsgTraceById")
+	if messageID := stringArgForCLITest(t, traceCall, "-i"); messageID != "0AE97A6A00017F3CA64A23D49A900003" {
+		t.Fatalf("expected trace query to use detail UNIQ_KEY, got %s in %#v", messageID, traceCall)
+	}
+	if traceTopic := stringArgForCLITest(t, traceCall, "-t"); traceTopic != "RMQ_SYS_TRACE_TOPIC" {
+		t.Fatalf("expected explicit trace topic, got %s in %#v", traceTopic, traceCall)
+	}
+}
+
+func TestRunM6ShadowRunPassesConcurrencyToBatchExecution(t *testing.T) {
+	fixtures := `{"samples":[
+		{"name":"command-smoke","args":["slow"]},
+		{"name":"command-smoke","args":["medium"]},
+		{"name":"command-smoke","args":["fast"]}
+	]}`
+	runner := &timedShadowRecordingRunner{
+		delayByCommand: map[string]time.Duration{
+			"slow":   40 * time.Millisecond,
+			"medium": 40 * time.Millisecond,
+			"fast":   40 * time.Millisecond,
+		},
+	}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	code := Run(context.Background(), Options{
+		NameServer: "127.0.0.1:9876",
+		Transport:  "process",
+		Runner:     runner,
+		Stdout:     &stdout,
+		Stderr:     &stderr,
+	}, []string{"--m6-shadow-run", "--m6-shadow-concurrency", "3", "--m6-shadow-fixtures", fixtures})
+
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d stderr=%q", code, stderr.String())
+	}
+	if runner.MaxActive() < 3 {
+		t.Fatalf("expected runner to observe concurrent batch execution, max active=%d", runner.MaxActive())
+	}
+	lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
+	if len(lines) != 4 {
+		t.Fatalf("expected three result lines plus summary line, got %d lines: %q", len(lines), stdout.String())
+	}
+	var summary nativeadmin.ShadowBatchSummaryReport
+	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &summary); err != nil {
+		t.Fatalf("expected summary JSON line, got %v", err)
+	}
+	if summary.Executed != 3 || summary.Skipped != 60 || summary.Summary.Mismatches != 0 {
+		t.Fatalf("unexpected summary after concurrent run: %#v", summary)
+	}
+}
+
+func TestRunM6ShadowRunRestoresWritePermBeforeEachWipeWritePermProvider(t *testing.T) {
+	fixtures := `{"samples":[{"name":"wipe-write-perm","args":["wipeWritePerm","-n","127.0.0.1:9876","-b","broker-a"]}]}`
+	runner := &mappedRecordingRunner{
+		outputsByCommand: map[string]string{
+			"addWritePerm":  "add write perm of broker[broker-a] in name server[127.0.0.1:9876] OK, 31\n",
+			"wipeWritePerm": "wipe write perm of broker[broker-a] in name server[127.0.0.1:9876] OK, 31\n",
+		},
+	}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	code := Run(context.Background(), Options{
+		NameServer: "127.0.0.1:9876",
+		Transport:  "process",
+		Runner:     runner,
+		Stdout:     &stdout,
+		Stderr:     &stderr,
+	}, []string{"--m6-shadow-run", "--m6-shadow-fixtures", fixtures})
+
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d stderr=%q stdout=%q", code, stderr.String(), stdout.String())
+	}
+	commands := runner.commandNames()
+	expected := []string{
+		"addWritePerm", "wipeWritePerm", "addWritePerm",
+		"addWritePerm", "wipeWritePerm", "addWritePerm",
+		"addWritePerm", "wipeWritePerm", "addWritePerm",
+		"addWritePerm", "wipeWritePerm", "addWritePerm",
+	}
+	if !reflect.DeepEqual(commands, expected) {
+		t.Fatalf("expected write permission restoration before every provider\nexpected=%#v\nactual=%#v\ncalls=%#v", expected, commands, runner.commands())
+	}
+	lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
+	var summary nativeadmin.ShadowBatchSummaryReport
+	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &summary); err != nil {
+		t.Fatalf("expected summary JSON line, got %v", err)
+	}
+	if summary.Executed != 1 || summary.Skipped != 60 || summary.Summary.Mismatches != 0 {
+		t.Fatalf("unexpected wipeWritePerm summary: %#v", summary)
+	}
+}
+
+func TestRunM6ShadowRunPreparesAndRestoresWritePermAroundEachAddWritePermProvider(t *testing.T) {
+	fixtures := `{"samples":[{"name":"add-write-perm","args":["addWritePerm","-n","127.0.0.1:9876","-b","broker-a"]}]}`
+	runner := &mappedRecordingRunner{
+		outputsByCommand: map[string]string{
+			"addWritePerm":  "add write perm of broker[broker-a] in name server[127.0.0.1:9876] OK, 31\n",
+			"wipeWritePerm": "wipe write perm of broker[broker-a] in name server[127.0.0.1:9876] OK, 31\n",
+		},
+	}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	code := Run(context.Background(), Options{
+		NameServer: "127.0.0.1:9876",
+		Transport:  "process",
+		Runner:     runner,
+		Stdout:     &stdout,
+		Stderr:     &stderr,
+	}, []string{"--m6-shadow-run", "--m6-shadow-fixtures", fixtures})
+
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d stderr=%q stdout=%q", code, stderr.String(), stdout.String())
+	}
+	commands := runner.commandNames()
+	expected := []string{
+		"wipeWritePerm", "addWritePerm", "addWritePerm",
+		"wipeWritePerm", "addWritePerm", "addWritePerm",
+		"wipeWritePerm", "addWritePerm", "addWritePerm",
+		"wipeWritePerm", "addWritePerm", "addWritePerm",
+	}
+	if !reflect.DeepEqual(commands, expected) {
+		t.Fatalf("expected write permission preparation and restoration around every addWritePerm provider\nexpected=%#v\nactual=%#v\ncalls=%#v", expected, commands, runner.commands())
+	}
+	lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
+	var summary nativeadmin.ShadowBatchSummaryReport
+	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &summary); err != nil {
+		t.Fatalf("expected summary JSON line, got %v", err)
+	}
+	if summary.Executed != 1 || summary.Skipped != 60 || summary.Summary.Mismatches != 0 {
+		t.Fatalf("unexpected addWritePerm summary: %#v", summary)
+	}
+}
+
+func TestRunM6ShadowRunPreparesAndCleansDeleteKvConfigAroundEachProvider(t *testing.T) {
+	fixtures := `{"samples":[{"name":"delete-kv-config","args":["deleteKvConfig","-n","127.0.0.1:9876","-s","GoadminM6ShadowKV","-k","key-a"]}]}`
+	runner := &mappedRecordingRunner{
+		outputsByCommand: map[string]string{
+			"updateKvConfig": "create or update kv config to namespace success.\n",
+			"deleteKvConfig": "delete kv config from namespace success.\n",
+		},
+	}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	code := Run(context.Background(), Options{
+		NameServer: "127.0.0.1:9876",
+		Transport:  "process",
+		Runner:     runner,
+		Stdout:     &stdout,
+		Stderr:     &stderr,
+	}, []string{"--m6-shadow-run", "--m6-shadow-fixtures", fixtures})
+
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d stderr=%q stdout=%q", code, stderr.String(), stdout.String())
+	}
+	commands := runner.commandNames()
+	expected := []string{
+		"updateKvConfig", "deleteKvConfig", "deleteKvConfig",
+		"updateKvConfig", "deleteKvConfig", "deleteKvConfig",
+		"updateKvConfig", "deleteKvConfig", "deleteKvConfig",
+		"updateKvConfig", "deleteKvConfig", "deleteKvConfig",
+	}
+	if !reflect.DeepEqual(commands, expected) {
+		t.Fatalf("expected KV preparation before and cleanup after every deleteKvConfig provider\nexpected=%#v\nactual=%#v\ncalls=%#v", expected, commands, runner.commands())
+	}
+	for _, call := range runner.commands() {
+		switch call[0] {
+		case "updateKvConfig":
+			if value := stringArgForCLITest(t, call, "-v"); value != "m6-shadow-delete-kv-prepare" {
+				t.Fatalf("expected updateKvConfig prepare value, got %q in %#v", value, call)
+			}
+		case "deleteKvConfig":
+			if namespace := stringArgForCLITest(t, call, "-s"); namespace != "GoadminM6ShadowKV" {
+				t.Fatalf("expected namespace to be copied, got %q in %#v", namespace, call)
+			}
+			if key := stringArgForCLITest(t, call, "-k"); key != "key-a" {
+				t.Fatalf("expected key to be copied, got %q in %#v", key, call)
+			}
+		default:
+			t.Fatalf("unexpected command in KV hook run: %#v", call)
+		}
+	}
+	lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
+	var summary nativeadmin.ShadowBatchSummaryReport
+	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &summary); err != nil {
+		t.Fatalf("expected summary JSON line, got %v", err)
+	}
+	if summary.Executed != 1 || summary.Skipped != 60 || summary.Summary.Mismatches != 0 {
+		t.Fatalf("unexpected deleteKvConfig summary: %#v", summary)
+	}
+}
+
+func TestRunM6ShadowCommandCapturesExportConfigsArtifact(t *testing.T) {
+	outputDir := filepath.Join(t.TempDir(), "export")
+	runner := &recordingRunner{
+		output: "export " + filepath.ToSlash(filepath.Join(outputDir, "configs.json")) + " success",
+		onCall: func(callCount int) {
+			if err := os.MkdirAll(outputDir, 0o755); err != nil {
+				t.Fatalf("mkdir export dir: %v", err)
+			}
+			if err := os.WriteFile(filepath.Join(outputDir, "configs.json"), []byte(`{"cluster":"DefaultCluster"}`), 0o644); err != nil {
+				t.Fatalf("write export configs artifact: %v", err)
+			}
+		},
+	}
+
+	output, err := runM6ShadowCommand(context.Background(), Options{
+		NameServer: "127.0.0.1:9876",
+		Transport:  "process",
+		Runner:     runner,
+	}, []string{"exportConfigs", "-n", "127.0.0.1:9876", "-c", "DefaultCluster", "-f", outputDir})
+
+	if err != nil {
+		t.Fatalf("expected exportConfigs shadow command to pass, got %v", err)
+	}
+	if output.Stdout != runner.output {
+		t.Fatalf("stdout mismatch: %#v", output)
+	}
+	if output.Artifacts["configs.json"] != `{"cluster":"DefaultCluster"}` {
+		t.Fatalf("expected configs.json artifact to be captured, got %#v", output.Artifacts)
+	}
+}
+
+func TestRunM6ShadowCommandCapturesExportMetadataArtifact(t *testing.T) {
+	outputDir := filepath.Join(t.TempDir(), "export")
+	runner := &recordingRunner{
+		output: "export " + filepath.ToSlash(filepath.Join(outputDir, "metadata.json")) + " success\n",
+		onCall: func(callCount int) {
+			if err := os.MkdirAll(outputDir, 0o755); err != nil {
+				t.Fatalf("mkdir export dir: %v", err)
+			}
+			if err := os.WriteFile(filepath.Join(outputDir, "metadata.json"), []byte(`{"exportTime":1782480000123}`), 0o644); err != nil {
+				t.Fatalf("write export metadata artifact: %v", err)
+			}
+		},
+	}
+
+	output, err := runM6ShadowCommand(context.Background(), Options{
+		NameServer: "127.0.0.1:9876",
+		Transport:  "process",
+		Runner:     runner,
+	}, []string{"exportMetadata", "-n", "127.0.0.1:9876", "-c", "DefaultCluster", "-f", outputDir})
+
+	if err != nil {
+		t.Fatalf("expected exportMetadata shadow command to pass, got %v", err)
+	}
+	if output.Artifacts["metadata.json"] != `{"exportTime":1782480000123}` {
+		t.Fatalf("expected metadata.json artifact to be captured, got %#v", output.Artifacts)
+	}
+}
+
+func TestRunM6ShadowCommandCapturesExportMetricsArtifact(t *testing.T) {
+	outputDir := filepath.Join(t.TempDir(), "export")
+	runner := &recordingRunner{
+		output: "export " + filepath.ToSlash(filepath.Join(outputDir, "metrics.json")) + " success\n",
+		onCall: func(callCount int) {
+			if err := os.MkdirAll(outputDir, 0o755); err != nil {
+				t.Fatalf("mkdir export dir: %v", err)
+			}
+			if err := os.WriteFile(filepath.Join(outputDir, "metrics.json"), []byte(`{"totalData":{}}`), 0o644); err != nil {
+				t.Fatalf("write export metrics artifact: %v", err)
+			}
+		},
+	}
+
+	output, err := runM6ShadowCommand(context.Background(), Options{
+		NameServer: "127.0.0.1:9876",
+		Transport:  "process",
+		Runner:     runner,
+	}, []string{"exportMetrics", "-n", "127.0.0.1:9876", "-c", "DefaultCluster", "-f", outputDir})
+
+	if err != nil {
+		t.Fatalf("expected exportMetrics shadow command to pass, got %v", err)
+	}
+	if output.Artifacts["metrics.json"] != `{"totalData":{}}` {
+		t.Fatalf("expected metrics.json artifact to be captured, got %#v", output.Artifacts)
 	}
 }
 
@@ -260,6 +678,58 @@ func TestRunM6ShadowRunRejectsPlaceholderOnlyPlan(t *testing.T) {
 	}
 	if len(runner.calls) != 0 {
 		t.Fatalf("expected runner to stay unused, got %#v", runner.calls)
+	}
+}
+
+func TestRunM6ShadowRunRejectsInvalidConcurrency(t *testing.T) {
+	runner := &recordingRunner{err: errors.New("invalid concurrency must not call runner")}
+	var stderr bytes.Buffer
+
+	code := Run(context.Background(), Options{
+		NameServer: "127.0.0.1:9876",
+		Transport:  "process",
+		Runner:     runner,
+		Stdout:     &bytes.Buffer{},
+		Stderr:     &stderr,
+	}, []string{"--m6-shadow-run", "--m6-shadow-concurrency", "0"})
+
+	if code == 0 {
+		t.Fatalf("expected invalid concurrency to fail")
+	}
+	if !strings.Contains(stderr.String(), "invalid --m6-shadow-concurrency") {
+		t.Fatalf("expected concurrency parse error, got %q", stderr.String())
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("expected runner to stay unused, got %#v", runner.calls)
+	}
+}
+
+func TestParseM6ShadowRunFlagsParsesConcurrency(t *testing.T) {
+	options := Options{}
+
+	fixturesJSON, fixturesFile, concurrency, err := parseM6ShadowRunFlags(&options, []string{
+		"--m6-shadow-run",
+		"--m6-shadow-concurrency", "4",
+		"--transport", "sidecar",
+		"--namesrv", "ns-a:9876",
+		"--sidecar-addr", "http://127.0.0.1:18091",
+		"--timeout-ms", "60000",
+		"--m6-shadow-fixtures", `{"samples":[]}`,
+	})
+	if err != nil {
+		t.Fatalf("expected flags to parse, got %v", err)
+	}
+	if fixturesJSON != `{"samples":[]}` || fixturesFile != "" {
+		t.Fatalf("unexpected fixtures parse result: json=%q file=%q", fixturesJSON, fixturesFile)
+	}
+	if concurrency != 4 {
+		t.Fatalf("expected concurrency 4, got %d", concurrency)
+	}
+	if options.Transport != "sidecar" || options.NameServer != "ns-a:9876" || options.SidecarAddr != "http://127.0.0.1:18091" {
+		t.Fatalf("unexpected parsed options: %#v", options)
+	}
+	if options.Timeout != 60*time.Second || options.SidecarTimeout != 60*time.Second {
+		t.Fatalf("expected timeout override to propagate, got timeout=%s sidecarTimeout=%s", options.Timeout, options.SidecarTimeout)
 	}
 }
 
@@ -1005,21 +1475,199 @@ type recordingRunner struct {
 	output  string
 	outputs []string
 	err     error
+	mutex   sync.Mutex
 	calls   [][]string
 	onCall  func(callCount int)
 }
 
+type timedShadowRecordingRunner struct {
+	delayByCommand map[string]time.Duration
+	mutex          sync.Mutex
+	active         int
+	maxActive      int
+	calls          [][]string
+}
+
+type mappedRecordingRunner struct {
+	outputsByCommand map[string]string
+	errByCommand     map[string]error
+	mutex            sync.Mutex
+	calls            [][]string
+}
+
 func (r *recordingRunner) Run(ctx context.Context, args ...string) (string, error) {
+	r.mutex.Lock()
 	r.calls = append(r.calls, append([]string(nil), args...))
+	callCount := len(r.calls)
+	r.mutex.Unlock()
 	if r.onCall != nil {
-		r.onCall(len(r.calls))
+		r.onCall(callCount)
 	}
 	if len(r.outputs) > 0 {
-		index := len(r.calls) - 1
+		index := callCount - 1
 		if index >= len(r.outputs) {
 			index = len(r.outputs) - 1
 		}
 		return r.outputs[index], r.err
 	}
 	return r.output, r.err
+}
+
+func (r *mappedRecordingRunner) Run(ctx context.Context, args ...string) (string, error) {
+	r.mutex.Lock()
+	r.calls = append(r.calls, append([]string(nil), args...))
+	r.mutex.Unlock()
+	command := ""
+	if len(args) > 0 {
+		command = args[0]
+	}
+	if r.errByCommand != nil {
+		if err := r.errByCommand[command]; err != nil {
+			return "", err
+		}
+	}
+	if r.outputsByCommand != nil {
+		return r.outputsByCommand[command], nil
+	}
+	return "", nil
+}
+
+func (r *mappedRecordingRunner) countCommand(command string) int {
+	r.mutex.Lock()
+	defer r.mutex.Unlock()
+	count := 0
+	for _, call := range r.calls {
+		if len(call) > 0 && call[0] == command {
+			count++
+		}
+	}
+	return count
+}
+
+func (r *mappedRecordingRunner) firstCommand(command string) []string {
+	r.mutex.Lock()
+	defer r.mutex.Unlock()
+	for _, call := range r.calls {
+		if len(call) > 0 && call[0] == command {
+			return append([]string(nil), call...)
+		}
+	}
+	return nil
+}
+
+func (r *mappedRecordingRunner) commands() [][]string {
+	r.mutex.Lock()
+	defer r.mutex.Unlock()
+	calls := make([][]string, len(r.calls))
+	for index, call := range r.calls {
+		calls[index] = append([]string(nil), call...)
+	}
+	return calls
+}
+
+func (r *mappedRecordingRunner) commandNames() []string {
+	r.mutex.Lock()
+	defer r.mutex.Unlock()
+	commands := make([]string, 0, len(r.calls))
+	for _, call := range r.calls {
+		if len(call) == 0 {
+			commands = append(commands, "")
+			continue
+		}
+		commands = append(commands, call[0])
+	}
+	return commands
+}
+
+func (r *timedShadowRecordingRunner) Run(ctx context.Context, args ...string) (string, error) {
+	r.mutex.Lock()
+	r.active++
+	if r.active > r.maxActive {
+		r.maxActive = r.active
+	}
+	r.calls = append(r.calls, append([]string(nil), args...))
+	r.mutex.Unlock()
+
+	command := ""
+	if len(args) > 0 {
+		command = args[0]
+	}
+	delay := r.delayByCommand[command]
+	if delay <= 0 {
+		delay = 10 * time.Millisecond
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		r.leave()
+		return "", ctx.Err()
+	case <-timer.C:
+	}
+	r.leave()
+	return "provider-" + command + "\n", nil
+}
+
+func (r *timedShadowRecordingRunner) leave() {
+	r.mutex.Lock()
+	defer r.mutex.Unlock()
+	r.active--
+}
+
+func (r *timedShadowRecordingRunner) MaxActive() int {
+	r.mutex.Lock()
+	defer r.mutex.Unlock()
+	return r.maxActive
+}
+
+func TestParseM6ShadowRunFlagsRejectsInvalidConcurrency(t *testing.T) {
+	options := Options{}
+	for _, value := range []string{"0", "-1", "abc"} {
+		t.Run("value_"+strconv.Quote(value), func(t *testing.T) {
+			_, _, _, err := parseM6ShadowRunFlags(&options, []string{"--m6-shadow-run", "--m6-shadow-concurrency", value})
+			if err == nil || !strings.Contains(err.Error(), "invalid --m6-shadow-concurrency") {
+				t.Fatalf("expected invalid concurrency error for %q, got %v", value, err)
+			}
+		})
+	}
+}
+
+func messageChainDetailOutputForTest(messageID string, topic string, queueID int, queueOffset int64) string {
+	return `OffsetID:            ` + messageID + `
+Topic:               ` + topic + `
+Tags:                [notice]
+Keys:                [user-10001]
+Queue ID:            ` + strconv.Itoa(queueID) + `
+Queue Offset:        ` + strconv.FormatInt(queueOffset, 10) + `
+Reconsume Times:     0
+Born Timestamp:      2026-06-06 19:48:01
+Born Host:           10.0.0.8:51111
+Store Timestamp:     2026-06-06 19:48:02
+Store Host:          127.0.0.1:10911
+Properties:          {MSG_REGION=DefaultRegion, UNIQ_KEY=0AE97A6A00017F3CA64A23D49A900003, TRACE_ON=true}
+Message Body:        {"assessmentId":10001,"status":"created"}`
+}
+
+func messageChainTraceSuccessOutputForTest(consumerGroup string) string {
+	return `#Type      #ProducerGroup       #ClientHost          #SendTime            #CostTimes #Status
+Pub        PG_NOTICE            10.0.0.8             2026-06-06 19:48:01  12ms       success
+
+#Type      #ConsumerGroup       #ClientHost          #ConsumerTime        #CostTimes #Status
+Sub        ` + consumerGroup + `            10.0.0.9             2026-06-06 19:48:05  18ms       success`
+}
+
+func messageChainTopicStatusOutputForTest(brokerName string, queueID int, minOffset int64, maxOffset int64) string {
+	return "#Broker Name                      #QID  #Min Offset           #Max Offset             #Last Updated\n" +
+		brokerName + "                          " + strconv.Itoa(queueID) + "     " + strconv.FormatInt(minOffset, 10) + "                     " + strconv.FormatInt(maxOffset, 10) + "                  2026-06-05 16:20:48,715\n"
+}
+
+func stringArgForCLITest(t *testing.T, args []string, name string) string {
+	t.Helper()
+	for index, arg := range args {
+		if arg == name && index+1 < len(args) {
+			return args[index+1]
+		}
+	}
+	t.Fatalf("arg %s not found in %#v", name, args)
+	return ""
 }
