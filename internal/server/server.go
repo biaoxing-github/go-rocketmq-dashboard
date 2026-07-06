@@ -41,6 +41,7 @@ type App struct {
 	clusterSnapshot         *snapshotStore[[]rocketmq.Cluster]
 	topicSnapshot           *snapshotStore[[]rocketmq.Topic]
 	consumerSnapshot        *snapshotStore[[]rocketmq.ConsumerGroup]
+	featureSnapshot         *snapshotStore[rocketmq.ClusterFeatureReport]
 	topicRouteSnapshots     *keyedSnapshotStore[rocketmq.TopicRoute]
 	topicStatusSnapshots    *keyedSnapshotStore[rocketmq.TopicStatus]
 	topicMessageSnapshots   *keyedSnapshotStore[rocketmq.TopicMessages]
@@ -71,6 +72,7 @@ type refreshTriggerPayload struct {
 	Clusters  bool `json:"clusters"`
 	Topics    bool `json:"topics"`
 	Consumers bool `json:"consumers"`
+	Features  bool `json:"features"`
 }
 
 // dashboardConfigPayload 返回当前运行配置，前端用它渲染 NameServer 切换入口。
@@ -87,6 +89,11 @@ type nameServerUpdateRequest struct {
 // topicMessagesIncrementalProvider 表示支持按旧快照复用历史消息 offset 的 Provider。
 type topicMessagesIncrementalProvider interface {
 	TopicMessagesIncremental(ctx context.Context, query rocketmq.MessageBrowseQuery, previous rocketmq.TopicMessages) (rocketmq.TopicMessages, error)
+}
+
+// clusterFeaturesProvider 表示可生成当前 NameServer 能力画像的 Provider。
+type clusterFeaturesProvider interface {
+	ClusterFeatures(ctx context.Context) (rocketmq.ClusterFeatureReport, error)
 }
 
 // New 创建 Dashboard HTTP 应用。
@@ -139,6 +146,13 @@ func (a *App) installProviderLocked(provider rocketmq.Provider, nameServer strin
 	a.clusterSnapshot = newSnapshotStore("clusters", ttl, provider.ClusterList)
 	a.topicSnapshot = newSnapshotStore("topics", ttl, provider.TopicList)
 	a.consumerSnapshot = newSnapshotStore("consumers", ttl, provider.ConsumerGroups)
+	if featureProvider, ok := provider.(clusterFeaturesProvider); ok {
+		a.featureSnapshot = newSnapshotStore("features", ttl, featureProvider.ClusterFeatures)
+	} else {
+		a.featureSnapshot = newSnapshotStore("features", ttl, func(context.Context) (rocketmq.ClusterFeatureReport, error) {
+			return rocketmq.ClusterFeatureReport{}, errors.New("当前 Provider 不支持能力画像")
+		})
+	}
 	a.topicRouteSnapshots = newKeyedSnapshotStore("topic-route", ttl, func(ctx context.Context, key string) (rocketmq.TopicRoute, error) {
 		return provider.TopicRoute(ctx, key)
 	})
@@ -244,6 +258,12 @@ func (a *App) consumerSnapshotStore() *snapshotStore[[]rocketmq.ConsumerGroup] {
 	return a.consumerSnapshot
 }
 
+func (a *App) featureSnapshotStore() *snapshotStore[rocketmq.ClusterFeatureReport] {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.featureSnapshot
+}
+
 func (a *App) topicRouteSnapshotStore() *keyedSnapshotStore[rocketmq.TopicRoute] {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
@@ -292,6 +312,7 @@ func (a *App) routes() {
 	a.mux.HandleFunc("/api/config", a.handleConfig)
 	a.mux.HandleFunc("/api/refresh", a.handleRefresh)
 	a.mux.HandleFunc("/api/clusters", a.handleClusters)
+	a.mux.HandleFunc("/api/features", a.handleFeatures)
 	a.mux.HandleFunc("/api/topics", a.handleTopics)
 	a.mux.HandleFunc("/api/topic-route", a.handleTopicRoute)
 	a.mux.HandleFunc("/api/topic-status", a.handleTopicStatus)
@@ -359,11 +380,13 @@ func (a *App) handleRefresh(w http.ResponseWriter, r *http.Request) {
 
 	start := time.Now()
 	clusterSnapshot, topicSnapshot, consumerSnapshot := a.coreSnapshots()
+	featureSnapshot := a.featureSnapshotStore()
 	triggered := refreshTriggerPayload{
 		// 每个 refreshAsync 都会拒绝重复并发任务，因此手动刷新不会放大 mqadmin 压力。
 		Clusters:  clusterSnapshot.refreshAsync(context.Background()),
 		Topics:    topicSnapshot.refreshAsync(context.Background()),
 		Consumers: consumerSnapshot.refreshAsync(context.Background()),
+		Features:  featureSnapshot.refreshAsync(context.Background()),
 	}
 	writeJSON(w, http.StatusOK, responsePayload[refreshTriggerPayload]{
 		Code:          0,
@@ -381,6 +404,39 @@ func (a *App) handleClusters(w http.ResponseWriter, r *http.Request) {
 
 	start := time.Now()
 	writeSnapshot(w, r, start, a.clusterSnapshotStore())
+}
+
+func (a *App) handleFeatures(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, errors.New("仅支持 GET"))
+		return
+	}
+
+	start := time.Now()
+	store := a.featureSnapshotStore()
+	if strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("refresh")), "true") {
+		store.refreshAsync(context.Background())
+	} else {
+		store.refreshIfStale(r.Context(), start)
+	}
+	view := store.view(time.Now())
+	report := view.Data
+	if !view.HasData {
+		nameServer, _ := a.nameServerConfig()
+		report = rocketmq.ClusterFeatureReport{NameServer: nameServer}
+	}
+	writeJSON(w, http.StatusOK, responsePayload[rocketmq.ClusterFeatureReport]{
+		Code:                 0,
+		Message:              "ok",
+		Data:                 report,
+		LatencyMillis:        time.Since(start).Milliseconds(),
+		CacheHit:             view.HasData && !view.Stale,
+		HasData:              view.HasData,
+		Stale:                view.Stale,
+		Refreshing:           view.Refreshing,
+		LastRefreshUnixMilli: view.LastRefreshUnixMilli,
+		LastError:            view.LastError,
+	})
 }
 
 func (a *App) handleTopics(w http.ResponseWriter, r *http.Request) {

@@ -137,6 +137,83 @@ func brokerRuntimeDescription(status BrokerStatus) string {
 	return strings.Join(parts, " · ")
 }
 
+// ParseConfigSections 将 getBrokerConfig/getNamesrvConfig 的文本输出解析成配置段。
+func ParseConfigSections(output string) ([]ConfigSection, error) {
+	sections := make([]ConfigSection, 0)
+	current := ConfigSection{Entries: make([]ConfigEntry, 0)}
+
+	flush := func() {
+		if current.Header == "" && len(current.Entries) == 0 {
+			return
+		}
+		sections = append(sections, current)
+		current = ConfigSection{Entries: make([]ConfigEntry, 0)}
+	}
+
+	for _, raw := range strings.Split(output, "\n") {
+		line := strings.TrimSpace(raw)
+		if line == "" || isConfigNoiseLine(line) {
+			continue
+		}
+		if strings.HasPrefix(line, "============") {
+			flush()
+			current.Header = strings.Trim(line, "=")
+			continue
+		}
+		key, value, ok := splitConfigEntryLine(line)
+		if !ok {
+			continue
+		}
+		current.Entries = append(current.Entries, ConfigEntry{Key: key, Value: value})
+	}
+	flush()
+
+	if len(sections) == 0 {
+		if summary := mqadminFailureSummary(output); summary != "" {
+			return nil, fmt.Errorf("配置命令失败: %s", summary)
+		}
+		return nil, fmt.Errorf("未解析到配置项")
+	}
+	return sections, nil
+}
+
+// ParseNameServerConfigs 解析 getNamesrvConfig 输出，保留每个 NameServer 的完整配置。
+func ParseNameServerConfigs(output string) ([]NameServerConfigSnapshot, error) {
+	sections, err := ParseConfigSections(output)
+	if err != nil {
+		return nil, err
+	}
+	configs := make([]NameServerConfigSnapshot, 0, len(sections))
+	for _, section := range sections {
+		configs = append(configs, NameServerConfigSnapshot{
+			NameServer: strings.TrimSpace(section.Header),
+			Entries:    append([]ConfigEntry(nil), section.Entries...),
+		})
+	}
+	return configs, nil
+}
+
+func splitConfigEntryLine(line string) (string, string, bool) {
+	index := strings.Index(line, "=")
+	if index < 0 {
+		return "", "", false
+	}
+	key := strings.TrimSpace(line[:index])
+	value := strings.TrimSpace(line[index+1:])
+	if key == "" {
+		return "", "", false
+	}
+	return key, value, true
+}
+
+func isConfigNoiseLine(line string) bool {
+	return strings.HasPrefix(line, "#") ||
+		strings.HasPrefix(line, "Java ") ||
+		strings.HasPrefix(line, "OpenJDK") ||
+		strings.HasPrefix(line, "Picked up ") ||
+		strings.HasPrefix(line, "SLF4J:")
+}
+
 // ParseTopicList 将 mqadmin topicList 输出解析成 Topic 列表，并标注 Topic 类型。
 func ParseTopicList(output string) []Topic {
 	lines := strings.Split(output, "\n")

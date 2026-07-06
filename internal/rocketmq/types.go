@@ -52,6 +52,70 @@ type BrokerRuntimeMetric struct {
 	Value string `json:"value"`
 }
 
+// ConfigEntry 表示 RocketMQ 配置输出中的一项 key/value。
+type ConfigEntry struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
+}
+
+// ConfigSection 表示 getBrokerConfig/getNamesrvConfig 输出中的一个配置段。
+type ConfigSection struct {
+	Header  string        `json:"header"`
+	Entries []ConfigEntry `json:"entries"`
+}
+
+// ClusterFeatureReport 汇总当前 NameServer 发现到的 Broker 配置、系统 Topic 和能力判断。
+type ClusterFeatureReport struct {
+	NameServer           string                     `json:"nameServer"`
+	GeneratedAtUnixMilli int64                      `json:"generatedAtUnixMilli"`
+	ClusterCount         int                        `json:"clusterCount"`
+	BrokerCount          int                        `json:"brokerCount"`
+	TopicCount           int                        `json:"topicCount"`
+	SystemTopicCount     int                        `json:"systemTopicCount"`
+	Capabilities         []FeatureCapability        `json:"capabilities"`
+	SystemTopics         []FeatureTopic             `json:"systemTopics"`
+	BrokerConfigs        []BrokerConfigSnapshot     `json:"brokerConfigs"`
+	NameServerConfigs    []NameServerConfigSnapshot `json:"nameServerConfigs"`
+	Warnings             []string                   `json:"warnings"`
+}
+
+// FeatureCapability 表示一个 RocketMQ 能力或开关的当前推断状态。
+type FeatureCapability struct {
+	Key      string   `json:"key"`
+	Label    string   `json:"label"`
+	Category string   `json:"category"`
+	Status   string   `json:"status"`
+	Detail   string   `json:"detail"`
+	Evidence []string `json:"evidence"`
+}
+
+// FeatureTopic 表示一个系统 Topic 是否在当前 NameServer 可见。
+type FeatureTopic struct {
+	Name    string `json:"name"`
+	Label   string `json:"label"`
+	Kind    string `json:"kind"`
+	Present bool   `json:"present"`
+	Detail  string `json:"detail"`
+}
+
+// BrokerConfigSnapshot 保留单个 Broker 的完整配置和常用关键配置。
+type BrokerConfigSnapshot struct {
+	Cluster    string        `json:"cluster"`
+	BrokerName string        `json:"brokerName"`
+	BrokerID   string        `json:"brokerId"`
+	BrokerAddr string        `json:"brokerAddr"`
+	Role       string        `json:"role"`
+	Version    string        `json:"version"`
+	Entries    []ConfigEntry `json:"entries"`
+	Highlights []ConfigEntry `json:"highlights"`
+}
+
+// NameServerConfigSnapshot 保留单个 NameServer 返回的完整配置。
+type NameServerConfigSnapshot struct {
+	NameServer string        `json:"nameServer"`
+	Entries    []ConfigEntry `json:"entries"`
+}
+
 // Topic 表示 RocketMQ Topic 列表项，Kind 用于前端区分普通、重试、死信和系统 Topic。
 type Topic struct {
 	Name string `json:"name"`

@@ -55,6 +55,52 @@ func (p SampleProvider) BrokerStatus(ctx context.Context, brokerAddr string) (Br
 	}, nil
 }
 
+// ClusterFeatures 返回样例能力画像，帮助前端在无 MQ 环境下展示配置页布局。
+func (p SampleProvider) ClusterFeatures(ctx context.Context) (ClusterFeatureReport, error) {
+	clusters, _ := p.ClusterList(ctx)
+	topics, _ := p.TopicList(ctx)
+	topics = append(topics,
+		Topic{Name: "RMQ_SYS_TRANS_HALF_TOPIC", Kind: "system"},
+		Topic{Name: "RMQ_SYS_TRANS_OP_HALF_TOPIC", Kind: "system"},
+		Topic{Name: "RMQ_SYS_TRACE_TOPIC", Kind: "system"},
+		Topic{Name: "SCHEDULE_TOPIC_XXXX", Kind: "system"},
+		Topic{Name: "rmq_sys_wheel_timer", Kind: "system"},
+	)
+	entries := []ConfigEntry{
+		{Key: "brokerClusterName", Value: "DefaultCluster"},
+		{Key: "brokerName", Value: "broker-a"},
+		{Key: "brokerId", Value: "0"},
+		{Key: "brokerRole", Value: "ASYNC_MASTER"},
+		{Key: "brokerPermission", Value: "6"},
+		{Key: "flushDiskType", Value: "ASYNC_FLUSH"},
+		{Key: "messageDelayLevel", Value: "1s 5s 10s 30s 1m 2m 3m 4m 5m 6m 7m 8m 9m 10m 20m 30m 1h 2h"},
+		{Key: "transactionCheckInterval", Value: "30000"},
+		{Key: "transactionCheckMax", Value: "15"},
+		{Key: "traceTopicEnable", Value: "true"},
+		{Key: "traceOn", Value: "true"},
+		{Key: "msgTraceTopicName", Value: "RMQ_SYS_TRACE_TOPIC"},
+		{Key: "timerStopEnqueue", Value: "false"},
+		{Key: "autoCreateTopicEnable", Value: "true"},
+		{Key: "autoCreateSubscriptionGroup", Value: "true"},
+		{Key: "slaveReadEnable", Value: "false"},
+		{Key: "useTLS", Value: "false"},
+		{Key: "authenticationEnabled", Value: "false"},
+		{Key: "authorizationEnabled", Value: "false"},
+		{Key: "popInvisibleTime", Value: "60000"},
+	}
+	brokerConfigs := []BrokerConfigSnapshot{
+		BrokerConfigSnapshotFromEntries(clusters[0].Brokers[0], entries),
+	}
+	nameServerConfigs := []NameServerConfigSnapshot{{
+		NameServer: "127.0.0.1:9876",
+		Entries: []ConfigEntry{
+			{Key: "rocketmqHome", Value: "/opt/rocketmq"},
+			{Key: "clusterTest", Value: "false"},
+		},
+	}}
+	return BuildClusterFeatureReport("127.0.0.1:9876", clusters, topics, brokerConfigs, nameServerConfigs, nil), nil
+}
+
 // TopicList 返回样例 Topic 列表。
 func (p SampleProvider) TopicList(ctx context.Context) ([]Topic, error) {
 	return []Topic{

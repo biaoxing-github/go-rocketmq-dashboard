@@ -369,6 +369,63 @@ func (p *MQAdminProvider) RunCommand(ctx context.Context, args ...string) (strin
 	return p.run(ctx, args...)
 }
 
+// ClusterFeatures 汇总当前 NameServer 发现到的系统 Topic、Broker 配置和可推断能力。
+func (p *MQAdminProvider) ClusterFeatures(ctx context.Context) (ClusterFeatureReport, error) {
+	clusters, err := p.ClusterList(ctx)
+	if err != nil {
+		return ClusterFeatureReport{}, err
+	}
+	warnings := make([]string, 0)
+	topics, err := p.TopicList(ctx)
+	if err != nil {
+		warnings = append(warnings, "Topic 列表读取失败: "+err.Error())
+	}
+
+	brokerConfigs := make([]BrokerConfigSnapshot, 0)
+	for _, cluster := range clusters {
+		for _, broker := range cluster.Brokers {
+			if strings.TrimSpace(broker.Address) == "" {
+				continue
+			}
+			output, err := p.run(ctx, "getBrokerConfig", "-b", broker.Address)
+			if err != nil {
+				warnings = append(warnings, fmt.Sprintf("%s 配置读取失败: %s", broker.Address, err.Error()))
+				continue
+			}
+			sections, err := ParseConfigSections(output)
+			if err != nil {
+				warnings = append(warnings, fmt.Sprintf("%s 配置解析失败: %s", broker.Address, err.Error()))
+				continue
+			}
+			entries := flattenConfigSections(sections)
+			brokerConfigs = append(brokerConfigs, BrokerConfigSnapshotFromEntries(broker, entries))
+		}
+	}
+
+	nameServerConfigs := []NameServerConfigSnapshot(nil)
+	if strings.TrimSpace(p.NameServer) != "" {
+		output, err := p.run(ctx, "getNamesrvConfig", "-n", p.NameServer)
+		if err != nil {
+			warnings = append(warnings, "NameServer 配置读取失败: "+err.Error())
+		} else {
+			nameServerConfigs, err = ParseNameServerConfigs(output)
+			if err != nil {
+				warnings = append(warnings, "NameServer 配置解析失败: "+err.Error())
+			}
+		}
+	}
+
+	return BuildClusterFeatureReport(p.NameServer, clusters, topics, brokerConfigs, nameServerConfigs, warnings), nil
+}
+
+func flattenConfigSections(sections []ConfigSection) []ConfigEntry {
+	entries := make([]ConfigEntry, 0)
+	for _, section := range sections {
+		entries = append(entries, section.Entries...)
+	}
+	return entries
+}
+
 // MessageChain 查询单条消息详情，并叠加 trace 与指定消费者组位点，形成可视化状态链路。
 func (p *MQAdminProvider) MessageChain(ctx context.Context, query MessageQuery) (MessageStatusChain, error) {
 	query.Topic = strings.TrimSpace(query.Topic)

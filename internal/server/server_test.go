@@ -17,6 +17,7 @@ import (
 type fakeProvider struct {
 	clusterCalls          int
 	brokerStatusCalls     int
+	featureCalls          int
 	topicCalls            int
 	topicRouteCalls       int
 	topicStatusCalls      int
@@ -73,6 +74,40 @@ func (p *fakeProvider) BrokerStatus(ctx context.Context, brokerAddr string) (roc
 			{Key: "dispatchBehindBytes", Value: "0"},
 		},
 	}, nil
+}
+
+func (p *fakeProvider) ClusterFeatures(ctx context.Context) (rocketmq.ClusterFeatureReport, error) {
+	p.featureCalls++
+	clusters := []rocketmq.Cluster{{
+		Name: "DefaultCluster",
+		Brokers: []rocketmq.Broker{{
+			Cluster:   "DefaultCluster",
+			Name:      "broker-a",
+			Address:   "127.0.0.1:10911",
+			Version:   "V5_2_0",
+			Activated: true,
+		}},
+	}}
+	topics := []rocketmq.Topic{
+		{Name: "sample_notice_topic", Kind: "normal"},
+		{Name: "%RETRY%sample-order-events-consumer", Kind: "retry"},
+		rocketmq.Topic{Name: "RMQ_SYS_TRANS_HALF_TOPIC", Kind: "system"},
+		rocketmq.Topic{Name: "RMQ_SYS_TRANS_OP_HALF_TOPIC", Kind: "system"},
+		rocketmq.Topic{Name: "RMQ_SYS_TRACE_TOPIC", Kind: "system"},
+	}
+	config := rocketmq.BrokerConfigSnapshotFromEntries(clusters[0].Brokers[0], []rocketmq.ConfigEntry{
+		{Key: "brokerRole", Value: "ASYNC_MASTER"},
+		{Key: "transactionCheckInterval", Value: "30000"},
+		{Key: "traceTopicEnable", Value: "true"},
+		{Key: "autoCreateTopicEnable", Value: "false"},
+	})
+	return rocketmq.BuildClusterFeatureReport("127.0.0.1:9876", clusters, topics, []rocketmq.BrokerConfigSnapshot{config}, []rocketmq.NameServerConfigSnapshot{{
+		NameServer: "127.0.0.1:9876",
+		Entries: []rocketmq.ConfigEntry{
+			{Key: "rocketmqHome", Value: "/opt/rocketmq"},
+			{Key: "clusterTest", Value: "false"},
+		},
+	}}, nil), nil
 }
 
 func (p *fakeProvider) TopicList(ctx context.Context) ([]rocketmq.Topic, error) {
@@ -357,6 +392,43 @@ func TestBrokerStatusEndpointReturnsRuntimeMetricsAndUsesCache(t *testing.T) {
 	}
 }
 
+func TestFeaturesEndpointReturnsCapabilityReportAndUsesCache(t *testing.T) {
+	provider := &fakeProvider{}
+	app := New(AppConfig{Provider: provider, ClusterCacheTTL: time.Second})
+
+	first := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/features", nil)
+	app.ServeHTTP(first, request)
+	if first.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", first.Code, first.Body.String())
+	}
+	waitForSnapshot(t, app.featureSnapshot)
+
+	cached := httptest.NewRecorder()
+	app.ServeHTTP(cached, request)
+
+	var payload responsePayload[rocketmq.ClusterFeatureReport]
+	if err := json.Unmarshal(cached.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if !payload.HasData || !payload.CacheHit || payload.Refreshing || payload.Stale {
+		t.Fatalf("expected hot cached features metadata, got %#v", payload)
+	}
+	if payload.Data.NameServer != "127.0.0.1:9876" || len(payload.Data.BrokerConfigs) != 1 || len(payload.Data.NameServerConfigs) != 1 {
+		t.Fatalf("unexpected feature payload: %#v", payload.Data)
+	}
+	capabilities := make(map[string]rocketmq.FeatureCapability)
+	for _, capability := range payload.Data.Capabilities {
+		capabilities[capability.Key] = capability
+	}
+	if capabilities["transaction"].Status != "supported" || capabilities["trace"].Status != "enabled" {
+		t.Fatalf("expected transaction and trace capabilities, got %#v", payload.Data.Capabilities)
+	}
+	if provider.featureCalls != 1 {
+		t.Fatalf("expected cached feature report to avoid second provider call, got %d calls", provider.featureCalls)
+	}
+}
+
 func TestBrokerStatusEndpointReturnsFastBeforeSlowProviderFinishes(t *testing.T) {
 	provider := &blockingBrokerStatusProvider{
 		fakeProvider: fakeProvider{},
@@ -416,7 +488,13 @@ func TestRefreshEndpointForcesSnapshotsBeforeTTLExpires(t *testing.T) {
 	if !payload.Data.Clusters || !payload.Data.Topics || !payload.Data.Consumers {
 		t.Fatalf("expected all snapshot refreshes to be triggered, got %#v", payload.Data)
 	}
+	if !payload.Data.Features {
+		t.Fatalf("expected feature snapshot refresh to be triggered, got %#v", payload.Data)
+	}
 	waitForProviderCalls(t, provider, 2, 2, 2)
+	waitForCondition(t, func() bool {
+		return provider.featureCalls >= 1
+	}, "feature refresh after manual refresh")
 }
 
 // TestRefreshEndpointDoesNotDuplicateRunningSnapshots 验证手动刷新不会为正在执行的核心快照叠加后台任务。

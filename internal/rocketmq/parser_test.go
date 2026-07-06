@@ -98,17 +98,86 @@ sample_order_events_topic
 		t.Fatalf("expected 6 topics, got %d", len(topics))
 	}
 	cases := map[string]string{
-		"%RETRY%mb-consumer-group":                "retry",
-		"%DLQ%EVENT_MESSAGES_TOPIC_CONSUMER":      "dlq",
-		"RMQ_SYS_TRANS_HALF_TOPIC":                "system",
-		"TBW102":                                  "system",
-		"BenchmarkTest":                           "normal",
-		"sample_order_events_topic": "normal",
+		"%RETRY%mb-consumer-group":           "retry",
+		"%DLQ%EVENT_MESSAGES_TOPIC_CONSUMER": "dlq",
+		"RMQ_SYS_TRANS_HALF_TOPIC":           "system",
+		"TBW102":                             "system",
+		"BenchmarkTest":                      "normal",
+		"sample_order_events_topic":          "normal",
 	}
 	for _, topic := range topics {
 		if cases[topic.Name] != topic.Kind {
 			t.Fatalf("topic %s kind mismatch: got %s want %s", topic.Name, topic.Kind, cases[topic.Name])
 		}
+	}
+}
+
+func TestParseConfigSectionsReadsBrokerAndNameServerConfig(t *testing.T) {
+	output := `============Master: 127.0.0.1:10911============
+brokerName                                        =  broker-a
+traceTopicEnable                                  =  true
+transactionCheckInterval=30000
+
+============127.0.0.1:9876============
+rocketmqHome                                      =  /opt/rocketmq
+clusterTest=false`
+
+	sections, err := ParseConfigSections(output)
+	if err != nil {
+		t.Fatalf("ParseConfigSections returned error: %v", err)
+	}
+	if len(sections) != 2 {
+		t.Fatalf("expected 2 sections, got %#v", sections)
+	}
+	if sections[0].Header != "Master: 127.0.0.1:10911" || sections[0].Entries[1].Key != "traceTopicEnable" || sections[0].Entries[1].Value != "true" {
+		t.Fatalf("unexpected broker config section: %#v", sections[0])
+	}
+	if sections[1].Header != "127.0.0.1:9876" || sections[1].Entries[1].Key != "clusterTest" || sections[1].Entries[1].Value != "false" {
+		t.Fatalf("unexpected namesrv config section: %#v", sections[1])
+	}
+}
+
+func TestBuildClusterFeatureReportInfersTransactionsAndTrace(t *testing.T) {
+	clusters := []Cluster{{
+		Name: "DefaultCluster",
+		Brokers: []Broker{{
+			Cluster: "DefaultCluster",
+			Name:    "broker-a",
+			ID:      "0",
+			Address: "127.0.0.1:10911",
+			Version: "V5_3_2",
+		}},
+	}}
+	topics := []Topic{
+		{Name: "RMQ_SYS_TRANS_HALF_TOPIC", Kind: "system"},
+		{Name: "RMQ_SYS_TRANS_OP_HALF_TOPIC", Kind: "system"},
+		{Name: "RMQ_SYS_TRACE_TOPIC", Kind: "system"},
+		{Name: "SCHEDULE_TOPIC_XXXX", Kind: "system"},
+	}
+	config := BrokerConfigSnapshotFromEntries(clusters[0].Brokers[0], []ConfigEntry{
+		{Key: "brokerRole", Value: "ASYNC_MASTER"},
+		{Key: "transactionCheckInterval", Value: "30000"},
+		{Key: "traceTopicEnable", Value: "true"},
+		{Key: "autoCreateTopicEnable", Value: "false"},
+	})
+
+	report := BuildClusterFeatureReport("127.0.0.1:9876", clusters, topics, []BrokerConfigSnapshot{config}, nil, nil)
+
+	if report.BrokerCount != 1 || report.SystemTopicCount != 4 || len(report.BrokerConfigs[0].Highlights) == 0 {
+		t.Fatalf("unexpected feature report summary: %#v", report)
+	}
+	capabilities := make(map[string]FeatureCapability)
+	for _, capability := range report.Capabilities {
+		capabilities[capability.Key] = capability
+	}
+	if capabilities["transaction"].Status != "supported" {
+		t.Fatalf("expected transaction support, got %#v", capabilities["transaction"])
+	}
+	if capabilities["trace"].Status != "enabled" {
+		t.Fatalf("expected trace enabled, got %#v", capabilities["trace"])
+	}
+	if capabilities["autoCreateTopic"].Status != "disabled" {
+		t.Fatalf("expected autoCreateTopic disabled, got %#v", capabilities["autoCreateTopic"])
 	}
 }
 

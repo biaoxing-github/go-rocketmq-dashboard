@@ -25,6 +25,7 @@
         <nav class="side-nav" aria-label="页面导航" role="tablist">
           <a href="#overview" data-tab="overview" role="tab" aria-selected="true" class="active">总览</a>
           <a href="#clusters" data-tab="clusters" role="tab" aria-selected="false">集群</a>
+          <a href="#features" data-tab="features" role="tab" aria-selected="false">配置</a>
           <a href="#topics" data-tab="topics" role="tab" aria-selected="false">Topic</a>
           <a href="#consumers" data-tab="consumers" role="tab" aria-selected="false">Consumer</a>
           <a href="#messages" data-tab="messages" role="tab" aria-selected="false">消息</a>
@@ -67,6 +68,7 @@
               </svg>
               <span>刷新快照</span>
             </button>
+            <button class="button button-secondary" type="button" data-tab-link="features">能力配置</button>
             <button class="button button-secondary" type="button" data-tab-link="messages">消息链路</button>
           </div>
         </header>
@@ -76,6 +78,11 @@
             <span>Broker 版本</span>
             <strong id="brokerVersion">-</strong>
             <small id="clusterMeta">等待加载</small>
+          </article>
+          <article class="kpi-card">
+            <span>事务消息</span>
+            <strong id="transactionSupport">-</strong>
+            <small id="transactionMeta">等待加载</small>
           </article>
           <article class="kpi-card">
             <span>Topic 数</span>
@@ -132,6 +139,94 @@
               <tbody id="clusterRows"></tbody>
             </table>
           </div>
+        </section>
+
+        <section class="panel page-view" id="features" data-page="features" hidden>
+          <div class="panel-head">
+            <div>
+              <h2>NameServer 能力与配置</h2>
+              <p>按当前 NameServer 汇总 Broker 配置、系统 Topic、事务消息和运行期开关。</p>
+            </div>
+            <div class="panel-meta">
+              <span id="featureStatus">等待刷新</span>
+              <div class="status-pills" id="featureMetaPills"></div>
+            </div>
+          </div>
+
+          <div id="featureSummary" class="summary-grid feature-summary">
+            <div>
+              <span>NameServer</span>
+              <strong>-</strong>
+            </div>
+            <div>
+              <span>Broker 配置</span>
+              <strong>-</strong>
+            </div>
+            <div>
+              <span>系统 Topic</span>
+              <strong>-</strong>
+            </div>
+            <div>
+              <span>采集时间</span>
+              <strong>-</strong>
+            </div>
+          </div>
+
+          <div id="capabilityGrid" class="capability-grid">
+            <div class="empty-state">等待能力画像。</div>
+          </div>
+
+          <div id="featureWarnings" class="feature-warnings" hidden></div>
+
+          <section class="feature-section">
+            <div class="detail-section-head">
+              <h3>系统 Topic</h3>
+              <span id="systemTopicCount">0 个</span>
+            </div>
+            <div class="table-wrap card-table">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Topic</th>
+                    <th>能力</th>
+                    <th>类型</th>
+                    <th>状态</th>
+                    <th>说明</th>
+                  </tr>
+                </thead>
+                <tbody id="systemTopicRows">
+                  <tr><td colspan="5">等待刷新。</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section class="feature-section">
+            <div class="detail-section-head">
+              <h3>NameServer 配置</h3>
+              <span id="nameServerConfigCount">0 项</span>
+            </div>
+            <div id="nameServerConfigGroups" class="config-groups">
+              <div class="empty-state">等待刷新。</div>
+            </div>
+          </section>
+
+          <section class="feature-section">
+            <div class="detail-section-head">
+              <h3>Broker 配置</h3>
+              <span id="brokerConfigCount">0 项</span>
+            </div>
+            <div class="config-toolbar">
+              <label for="featureConfigSearch">
+                <span>过滤配置</span>
+                <input id="featureConfigSearch" type="search" autocomplete="off" placeholder="key / value / broker" />
+              </label>
+              <button id="featureConfigSearchClear" class="route-action" type="button">清空</button>
+            </div>
+            <div id="brokerConfigGroups" class="config-groups">
+              <div class="empty-state">等待刷新。</div>
+            </div>
+          </section>
         </section>
 
         <section class="panel page-view" id="topics" data-page="topics" hidden>

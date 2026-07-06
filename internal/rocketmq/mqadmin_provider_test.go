@@ -189,6 +189,53 @@ sample_notice_topic broker-a 3 10241 10239 10.0.0.9 2 0 2026-06-06 19:49:00`,
 	}
 }
 
+func TestClusterFeaturesCollectsBrokerAndNameServerConfigs(t *testing.T) {
+	runner := newRecordingCommandRunner(map[string]string{
+		"clusterList": `#Cluster Name           #Broker Name            #BID  #Addr                  #Version              #InTPS(LOAD)                   #OutTPS(LOAD)  #Timer(Progress)        #PCWait(ms)  #Hour         #SPACE    #ACTIVATED
+DefaultCluster          broker-a                0     127.0.0.1:10911     V5_3_2                 0.00(0,0ms)               0.00(0,0ms|N,Nms)  0-0(0.0w, 0.0, 0.0)               0  1446.72       0.1200          true`,
+		"topicList": `RMQ_SYS_TRANS_HALF_TOPIC
+RMQ_SYS_TRANS_OP_HALF_TOPIC
+RMQ_SYS_TRACE_TOPIC
+sample_notice_topic`,
+		"getBrokerConfig": `============127.0.0.1:10911============
+brokerName                                        =  broker-a
+brokerRole                                        =  ASYNC_MASTER
+transactionCheckInterval                          =  30000
+traceTopicEnable                                  =  true
+autoCreateTopicEnable                             =  false`,
+		"getNamesrvConfig": `============127.0.0.1:9876============
+rocketmqHome                                      =  /opt/rocketmq
+clusterTest                                       =  false`,
+	})
+	provider := &MQAdminProvider{NameServer: "127.0.0.1:9876", CommandRunner: runner}
+
+	report, err := provider.ClusterFeatures(context.Background())
+	if err != nil {
+		t.Fatalf("ClusterFeatures returned error: %v", err)
+	}
+	if report.BrokerCount != 1 || len(report.BrokerConfigs) != 1 || len(report.NameServerConfigs) != 1 {
+		t.Fatalf("unexpected feature report: %#v", report)
+	}
+	capabilities := make(map[string]FeatureCapability)
+	for _, capability := range report.Capabilities {
+		capabilities[capability.Key] = capability
+	}
+	if capabilities["transaction"].Status != "supported" || capabilities["trace"].Status != "enabled" || capabilities["autoCreateTopic"].Status != "disabled" {
+		t.Fatalf("unexpected capabilities: %#v", report.Capabilities)
+	}
+	if runner.countCommand("getBrokerConfig") != 1 || runner.countCommand("getNamesrvConfig") != 1 {
+		t.Fatalf("expected config commands, calls=%#v", runner.commands())
+	}
+	brokerCall := runner.firstCommand("getBrokerConfig")
+	if broker := stringArgForTest(t, brokerCall, "-b"); broker != "127.0.0.1:10911" {
+		t.Fatalf("expected broker config address, got %s in %#v", broker, brokerCall)
+	}
+	nameServerCall := runner.firstCommand("getNamesrvConfig")
+	if nameServer := stringArgForTest(t, nameServerCall, "-n"); nameServer != "127.0.0.1:9876" {
+		t.Fatalf("expected namesrv config address, got %s in %#v", nameServer, nameServerCall)
+	}
+}
+
 func TestSearchMessageByKeyUsesNarrowDefaultWindow(t *testing.T) {
 	runner := newRecordingCommandRunner(map[string]string{
 		"queryMsgByKey":     "7F00000100002A9F00000000000123AB 3 10240\n",

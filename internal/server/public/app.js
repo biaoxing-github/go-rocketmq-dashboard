@@ -3,6 +3,9 @@ const state = {
   config: null,
   health: null,
   clusters: [],
+  features: null,
+  lastFeaturePayload: null,
+  featureConfigSearch: "",
   topics: [],
   lastTopicPayload: null,
   topicSearch: "",
@@ -541,22 +544,27 @@ async function loadSnapshots(options = {}) {
   }
   $("#snapshotState").textContent = "加载中";
   try {
-    const [clusterPayload, topicPayload, consumerPayload] = await Promise.all([
+    const [clusterPayload, featurePayload, topicPayload, consumerPayload] = await Promise.all([
       fetchJSON("/api/clusters"),
+      fetchJSON("/api/features"),
       fetchJSON("/api/topics"),
       fetchJSON("/api/consumers")
     ]);
     state.clusters = clusterPayload.data || [];
+    state.features = featurePayload.data || null;
+    state.lastFeaturePayload = featurePayload;
     state.topics = topicPayload.data || [];
     state.consumers = consumerPayload.data || [];
     state.lastConsumerPayload = consumerPayload;
     renderClusters(clusterPayload);
+    renderFeatures(featurePayload);
     renderTopics(topicPayload);
     renderConsumers(consumerPayload);
-    renderOverview(clusterPayload, topicPayload, consumerPayload);
-    scheduleSnapshotPoll(clusterPayload, topicPayload, consumerPayload);
+    renderOverview(clusterPayload, featurePayload, topicPayload, consumerPayload);
+    scheduleSnapshotPoll(clusterPayload, featurePayload, topicPayload, consumerPayload);
   } catch (error) {
     $("#clusterStatus").textContent = error.message;
+    $("#featureStatus").textContent = error.message;
     $("#topicStatus").textContent = error.message;
     $("#consumerStatus").textContent = error.message;
     $("#snapshotState").textContent = "异常";
@@ -603,22 +611,25 @@ function scheduleSnapshotPoll(...payloads) {
   }, 1500);
 }
 
-// renderOverview 汇总三个快照里的核心结论，先给用户结果，再给细节。
-function renderOverview(clusterPayload, topicPayload, consumerPayload) {
+// renderOverview 汇总核心快照里的结论，先给用户结果，再给细节。
+function renderOverview(clusterPayload, featurePayload, topicPayload, consumerPayload) {
   const clusterBrokerCount = state.clusters.reduce((total, cluster) => total + (cluster.brokers?.length || 0), 0);
   const version = firstBrokerVersion(state.clusters);
   const maxLag = state.consumers.reduce((max, consumer) => Math.max(max, Number(consumer.diffTotal || 0)), 0);
+  const transaction = capabilityByKey(featurePayload?.data, "transaction");
 
   $("#brokerVersion").textContent = version;
   $("#clusterMeta").textContent = metaText(clusterPayload, `${state.clusters.length} 个 cluster · ${clusterBrokerCount} 个 broker`);
+  $("#transactionSupport").textContent = capabilityStatusText(transaction?.status);
+  $("#transactionMeta").textContent = transaction?.detail || snapshotStatusText(featurePayload || {});
   $("#topicCount").textContent = `${state.topics.length}`;
   $("#topicMeta").textContent = metaText(topicPayload, "normal / retry / dlq / system");
   $("#consumerCount").textContent = `${state.consumers.length}`;
   $("#consumerMeta").textContent = metaText(consumerPayload, "在线与离线组一起展示");
   $("#maxLag").textContent = `${maxLag}`;
   $("#consumerLagMeta").textContent = maxLag > 0 ? "有堆积" : "无堆积";
-  $("#snapshotState").textContent = summariseSnapshot(clusterPayload, topicPayload, consumerPayload);
-  $("#snapshotMeta").textContent = state.lastRefreshTriggerText || "三个只读快照并行刷新";
+  $("#snapshotState").textContent = summariseSnapshot(clusterPayload, featurePayload, topicPayload, consumerPayload);
+  $("#snapshotMeta").textContent = state.lastRefreshTriggerText || "核心快照与能力画像并行刷新";
   $("#chainMeta").textContent = "输入消息后展示";
 }
 
@@ -674,6 +685,218 @@ function selectCluster(clusterName) {
   renderTopicMutationPanel();
   renderTopicMessageSendPanel();
   setActiveTab("topics");
+}
+
+function renderFeatures(payload) {
+  state.lastFeaturePayload = payload;
+  state.features = payload?.data || null;
+  const report = state.features || {};
+  $("#featureStatus").textContent = snapshotStatusText(payload);
+  $("#featureMetaPills").innerHTML = snapshotPills(payload);
+  renderFeatureSummary(report);
+  renderCapabilityGrid(report);
+  renderFeatureWarnings(report.warnings || []);
+  renderSystemTopics(report.systemTopics || []);
+  renderNameServerConfigGroups(report.nameServerConfigs || []);
+  renderBrokerConfigGroups(report.brokerConfigs || []);
+}
+
+function renderFeatureSummary(report) {
+  const brokerConfigCount = (report.brokerConfigs || []).reduce((total, broker) => total + (broker.entries?.length || 0), 0);
+  $("#featureSummary").innerHTML = `
+    <div>
+      <span>NameServer</span>
+      <strong>${escapeHTML(report.nameServer || currentNameServer() || "-")}</strong>
+    </div>
+    <div>
+      <span>Broker 配置</span>
+      <strong>${escapeHTML(report.brokerConfigs?.length || 0)} / ${escapeHTML(brokerConfigCount)}</strong>
+    </div>
+    <div>
+      <span>系统 Topic</span>
+      <strong>${escapeHTML(report.systemTopicCount || 0)} / ${escapeHTML((report.systemTopics || []).length)}</strong>
+    </div>
+    <div>
+      <span>采集时间</span>
+      <strong>${escapeHTML(formatTime(report.generatedAtUnixMilli))}</strong>
+    </div>
+  `;
+}
+
+function renderCapabilityGrid(report) {
+  const capabilities = report.capabilities || [];
+  if (!capabilities.length) {
+    $("#capabilityGrid").innerHTML = `<div class="empty-state">能力画像刷新中。</div>`;
+    return;
+  }
+  $("#capabilityGrid").innerHTML = capabilities.map((capability) => {
+    const evidence = (capability.evidence || []).slice(0, 4);
+    return `
+      <article class="capability-item capability-${escapeAttr(capability.status || "unknown")}">
+        <div class="capability-head">
+          <span>${escapeHTML(capability.category || "Feature")}</span>
+          <strong>${escapeHTML(capability.label || capability.key)}</strong>
+          <em class="pill ${capabilityPillClass(capability.status)}">${escapeHTML(capabilityStatusText(capability.status))}</em>
+        </div>
+        <p>${escapeHTML(capability.detail || "-")}</p>
+        <ul>
+          ${evidence.map((item) => `<li>${escapeHTML(item)}</li>`).join("") || "<li>暂无证据</li>"}
+        </ul>
+      </article>
+    `;
+  }).join("");
+}
+
+function renderFeatureWarnings(warnings) {
+  const container = $("#featureWarnings");
+  if (!warnings.length) {
+    container.hidden = true;
+    container.innerHTML = "";
+    return;
+  }
+  container.hidden = false;
+  container.innerHTML = warnings.map((warning) => `<span class="pill pill-warn">${escapeHTML(warning)}</span>`).join("");
+}
+
+function renderSystemTopics(topics) {
+  const present = topics.filter((topic) => topic.present).length;
+  $("#systemTopicCount").textContent = `${present} / ${topics.length} 个`;
+  const rows = topics.map((topic) => `
+    <tr>
+      ${tableCell("Topic", escapeHTML(topic.name || "-"), "mono wrap-cell")}
+      ${tableCell("能力", escapeHTML(topic.label || "-"))}
+      ${tableCell("类型", `<span class="tag tag-${escapeAttr(topic.kind || "system")}">${escapeHTML(topic.kind || "system")}</span>`)}
+      ${tableCell("状态", `<span class="pill ${topic.present ? "pill-ok" : "pill-muted"}">${topic.present ? "已注册" : "未发现"}</span>`)}
+      ${tableCell("说明", escapeHTML(topic.detail || "-"), "wrap-cell")}
+    </tr>
+  `);
+  $("#systemTopicRows").innerHTML = rows.join("") || `<tr><td colspan="5">暂无系统 Topic 数据。</td></tr>`;
+}
+
+function renderNameServerConfigGroups(groups) {
+  const total = groups.reduce((sum, group) => sum + (group.entries?.length || 0), 0);
+  $("#nameServerConfigCount").textContent = `${groups.length} 组 / ${total} 项`;
+  if (!groups.length) {
+    $("#nameServerConfigGroups").innerHTML = `<div class="empty-state">暂无 NameServer 配置。</div>`;
+    return;
+  }
+  $("#nameServerConfigGroups").innerHTML = groups.map((group) => `
+    <details class="config-group" open>
+      <summary>
+        <span>${escapeHTML(group.nameServer || "NameServer")}</span>
+        <strong>${escapeHTML(group.entries?.length || 0)} 项</strong>
+      </summary>
+      ${configEntriesTableHTML(group.entries || [], "暂无 NameServer 配置项。")}
+    </details>
+  `).join("");
+}
+
+function renderBrokerConfigGroups(groups) {
+  const keyword = normalizeSearchText(state.featureConfigSearch);
+  const total = groups.reduce((sum, group) => sum + (group.entries?.length || 0), 0);
+  $("#brokerConfigCount").textContent = keyword ? `过滤中 / ${total} 项` : `${groups.length} 个 Broker / ${total} 项`;
+  if (!groups.length) {
+    $("#brokerConfigGroups").innerHTML = `<div class="empty-state">暂无 Broker 配置。</div>`;
+    return;
+  }
+  $("#brokerConfigGroups").innerHTML = groups.map((group) => {
+    const entries = filterConfigEntries(group, keyword);
+    const title = [group.cluster, group.brokerName, group.brokerId ? `ID ${group.brokerId}` : ""].filter(Boolean).join(" · ") || group.brokerAddr || "Broker";
+    return `
+      <details class="config-group" open>
+        <summary>
+          <span>${escapeHTML(title)}</span>
+          <strong>${escapeHTML(entries.length)} / ${escapeHTML(group.entries?.length || 0)} 项</strong>
+        </summary>
+        <div class="summary-grid config-highlight-grid">
+          ${configHighlightHTML(group)}
+        </div>
+        ${configEntriesTableHTML(entries, keyword ? "没有匹配的配置项。" : "暂无 Broker 配置项。")}
+      </details>
+    `;
+  }).join("");
+}
+
+function configHighlightHTML(group) {
+  const highlights = (group.highlights || []).slice(0, 8);
+  const base = [
+    ["地址", group.brokerAddr],
+    ["角色", group.role],
+    ["版本", group.version]
+  ].filter(([, value]) => value);
+  const rows = base.map(([key, value]) => `<div><span>${escapeHTML(key)}</span><strong>${escapeHTML(value)}</strong></div>`);
+  rows.push(...highlights.map((entry) => `<div><span>${escapeHTML(entry.key)}</span><strong>${escapeHTML(entry.value || "-")}</strong></div>`));
+  return rows.join("") || `<div><span>摘要</span><strong>-</strong></div>`;
+}
+
+function configEntriesTableHTML(entries, emptyText) {
+  const rows = entries.map((entry) => `
+    <tr>
+      ${tableCell("Key", escapeHTML(entry.key || "-"), "mono wrap-cell")}
+      ${tableCell("Value", escapeHTML(entry.value || "-"), "mono wrap-cell")}
+    </tr>
+  `).join("");
+  return dataTableHTML(["Key", "Value"], rows, emptyText);
+}
+
+function filterConfigEntries(group, keyword) {
+  const entries = group.entries || [];
+  if (!keyword) {
+    return entries;
+  }
+  const brokerText = normalizeSearchText(`${group.cluster || ""} ${group.brokerName || ""} ${group.brokerAddr || ""}`);
+  return entries.filter((entry) => {
+    const text = normalizeSearchText(`${entry.key || ""} ${entry.value || ""}`);
+    return text.includes(keyword) || brokerText.includes(keyword);
+  });
+}
+
+function handleFeatureConfigSearchInput(event) {
+  state.featureConfigSearch = event.target.value || "";
+  renderBrokerConfigGroups(state.features?.brokerConfigs || []);
+}
+
+function clearFeatureConfigSearch() {
+  state.featureConfigSearch = "";
+  $("#featureConfigSearch").value = "";
+  renderBrokerConfigGroups(state.features?.brokerConfigs || []);
+}
+
+function capabilityByKey(report, key) {
+  return (report?.capabilities || []).find((capability) => capability.key === key) || null;
+}
+
+function capabilityStatusText(status) {
+  switch (status) {
+    case "enabled":
+      return "已开启";
+    case "supported":
+      return "支持";
+    case "disabled":
+      return "未开启";
+    case "partial":
+      return "部分";
+    case "warning":
+      return "注意";
+    case "unknown":
+    default:
+      return "-";
+  }
+}
+
+function capabilityPillClass(status) {
+  switch (status) {
+    case "enabled":
+    case "supported":
+      return "pill-ok";
+    case "partial":
+    case "warning":
+      return "pill-warn";
+    case "disabled":
+      return "pill-muted";
+    default:
+      return "pill-info";
+  }
 }
 
 // renderTopics 把 Topic 列表按类型区分展示，并为每行保留路由和队列水位查询入口。
@@ -2555,8 +2778,11 @@ function resetRuntimeSelections() {
   resetTopicMessagesPoll();
   resetConsumerDetailPoll();
   state.clusters = [];
+  state.features = null;
   state.topics = [];
   state.consumers = [];
+  state.lastFeaturePayload = null;
+  state.featureConfigSearch = "";
   state.selectedClusterName = "";
   state.selectedTopicName = "";
   state.selectedTopicRouteTopic = "";
@@ -2573,6 +2799,11 @@ function resetRuntimeSelections() {
   $("#topicRouteRows").innerHTML = `<tr><td colspan="6">选择一个 Topic 查看路由。</td></tr>`;
   $("#topicQueueRows").innerHTML = `<tr><td colspan="6">选择一个 Topic 查看队列水位。</td></tr>`;
   $("#topicMessageRows").innerHTML = `<tr><td colspan="8">选择一个 Topic 浏览消息。</td></tr>`;
+  $("#systemTopicRows").innerHTML = `<tr><td colspan="5">等待刷新。</td></tr>`;
+  $("#capabilityGrid").innerHTML = `<div class="empty-state">等待能力画像。</div>`;
+  $("#nameServerConfigGroups").innerHTML = `<div class="empty-state">等待刷新。</div>`;
+  $("#brokerConfigGroups").innerHTML = `<div class="empty-state">等待刷新。</div>`;
+  $("#featureConfigSearch").value = "";
   $("#chainSource").textContent = "等待从消息列表选择，或使用高级查询。";
 }
 
@@ -2731,6 +2962,7 @@ function snapshotPills(payload) {
 function refreshTriggerText(triggered) {
   const names = [
     ["clusters", "集群"],
+    ["features", "配置"],
     ["topics", "Topic"],
     ["consumers", "Consumer"]
   ];
@@ -2787,6 +3019,8 @@ $("#detailDialogClose").addEventListener("click", closeDetailDialog);
 $("#refreshButton").addEventListener("click", forceRefreshSnapshots);
 $("#topicSearchInput").addEventListener("input", handleTopicSearchInput);
 $("#topicSearchClear").addEventListener("click", clearTopicSearch);
+$("#featureConfigSearch").addEventListener("input", handleFeatureConfigSearchInput);
+$("#featureConfigSearchClear").addEventListener("click", clearFeatureConfigSearch);
 $("#consumerSearchInput").addEventListener("input", handleConsumerSearchInput);
 $("#consumerSearchClear").addEventListener("click", clearConsumerSearch);
 $("#topicRouteOpenDetail").addEventListener("click", openTopicRouteDetail);
@@ -2822,6 +3056,7 @@ loadConfig()
   .catch((error) => {
     $("#snapshotState").textContent = error.message;
     $("#clusterStatus").textContent = error.message;
+    $("#featureStatus").textContent = error.message;
     $("#topicStatus").textContent = error.message;
     $("#consumerStatus").textContent = error.message;
   });
