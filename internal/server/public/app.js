@@ -3142,6 +3142,15 @@ function formatTime(value) {
   return new Date(value).toLocaleString("zh-CN", { hour12: false });
 }
 
+// formatCount 把队列水位、样本数等整数统一格式化，避免大数在面板里难以扫描。
+function formatCount(value) {
+  const number = Number(value || 0);
+  if (!Number.isFinite(number)) {
+    return "0";
+  }
+  return number.toLocaleString("zh-CN", { maximumFractionDigits: 0 });
+}
+
 // optionalNonNegativeInteger 解析可空的非负整数字段，空字符串表示不向后端传该参数。
 function optionalNonNegativeInteger(value, fieldName) {
   const raw = String(value || "").trim();

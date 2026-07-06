@@ -7,6 +7,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"regexp"
 	"sync"
 	"testing"
 	"time"
@@ -35,6 +37,30 @@ type fakeProvider struct {
 	lastOffsetReset       rocketmq.ConsumerOffsetResetRequest
 	lastTopicMessageQuery rocketmq.MessageBrowseQuery
 	lastMessageChainQuery rocketmq.MessageQuery
+}
+
+func TestPublicAppDefinesCalledFormatHelpers(t *testing.T) {
+	script, err := os.ReadFile("public/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(script)
+	definitionPattern := regexp.MustCompile(`(?m)^(?:async\s+)?function\s+(format[A-Za-z0-9_$]*)\s*\(`)
+	callPattern := regexp.MustCompile(`\b(format[A-Za-z0-9_$]*)\s*\(`)
+	defined := make(map[string]bool)
+	for _, match := range definitionPattern.FindAllStringSubmatch(source, -1) {
+		defined[match[1]] = true
+	}
+	for _, match := range callPattern.FindAllStringSubmatchIndex(source, -1) {
+		if match[0] > 0 && source[match[0]-1] == '.' {
+			continue
+		}
+		name := source[match[2]:match[3]]
+		if defined[name] {
+			continue
+		}
+		t.Fatalf("public/app.js calls undefined format helper %q", name)
+	}
 }
 
 func (p *fakeProvider) ClusterList(ctx context.Context) ([]rocketmq.Cluster, error) {
