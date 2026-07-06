@@ -287,6 +287,30 @@ func normalizeShadowOutputForCommand(command string, output shadowComparableOutp
 		output.Stdout = normalized.Stdout
 		output.Stderr = normalized.Stderr
 	}
+	if command == "checkMsgSendRT" {
+		normalized := normalizeCheckMsgSendRTShadowOutput(ShadowOutput{
+			Stdout: output.Stdout,
+			Stderr: output.Stderr,
+		})
+		output.Stdout = normalized.Stdout
+		output.Stderr = normalized.Stderr
+	}
+	if command == "sendMsgStatus" {
+		normalized := normalizeSendMsgStatusShadowOutput(ShadowOutput{
+			Stdout: output.Stdout,
+			Stderr: output.Stderr,
+		})
+		output.Stdout = normalized.Stdout
+		output.Stderr = normalized.Stderr
+	}
+	if command == "sendMessage" {
+		normalized := normalizeSendMessageShadowOutput(ShadowOutput{
+			Stdout: output.Stdout,
+			Stderr: output.Stderr,
+		})
+		output.Stdout = normalized.Stdout
+		output.Stderr = normalized.Stderr
+	}
 	return output
 }
 
@@ -331,6 +355,59 @@ func normalizeProducerShadowOutput(output ShadowOutput) ShadowOutput {
 	output.Stdout = producerLastUpdateTimestampPattern.ReplaceAllString(output.Stdout, "lastUpdateTimestamp=<dynamic>")
 	output.Stderr = producerLastUpdateTimestampPattern.ReplaceAllString(output.Stderr, "lastUpdateTimestamp=<dynamic>")
 	return output
+}
+
+var checkMsgSendRTRowPattern = regexp.MustCompile(`^(.+\s)[0-9]+$`)
+var checkMsgSendRTAvgPattern = regexp.MustCompile(`^Avg RT: [0-9]+(?:\.[0-9]+)?$`)
+
+// normalizeCheckMsgSendRTShadowOutput 仅屏蔽 checkMsgSendRT 发送探测表中的单行 RT 和 Avg RT。
+func normalizeCheckMsgSendRTShadowOutput(output ShadowOutput) ShadowOutput {
+	output.Stdout = normalizeShadowTextLines(output.Stdout, normalizeCheckMsgSendRTShadowLine)
+	return output
+}
+
+func normalizeCheckMsgSendRTShadowLine(line string) string {
+	if checkMsgSendRTAvgPattern.MatchString(line) {
+		return "Avg RT: <rt>"
+	}
+	if checkMsgSendRTRowPattern.MatchString(line) {
+		return checkMsgSendRTRowPattern.ReplaceAllString(line, `${1}<rt>`)
+	}
+	return line
+}
+
+var sendMsgStatusRTPattern = regexp.MustCompile(`rt=[0-9]+ms`)
+var sendMsgStatusMsgIDPattern = regexp.MustCompile(`msgId=[^,\]]+`)
+var sendMsgStatusOffsetMsgIDPattern = regexp.MustCompile(`offsetMsgId=[^,\]]+`)
+var sendMsgStatusQueueOffsetPattern = regexp.MustCompile(`queueOffset=[0-9]+`)
+
+// normalizeSendMsgStatusShadowOutput 仅屏蔽 sendMsgStatus 压测输出中的发送耗时和消息位点字段。
+func normalizeSendMsgStatusShadowOutput(output ShadowOutput) ShadowOutput {
+	output.Stdout = normalizeShadowTextLines(output.Stdout, normalizeSendMsgStatusShadowLine)
+	return output
+}
+
+func normalizeSendMsgStatusShadowLine(line string) string {
+	line = sendMsgStatusRTPattern.ReplaceAllString(line, "rt=<rt>ms")
+	line = sendMsgStatusOffsetMsgIDPattern.ReplaceAllString(line, "offsetMsgId=<offsetMsgId>")
+	line = sendMsgStatusMsgIDPattern.ReplaceAllString(line, "msgId=<msgId>")
+	line = sendMsgStatusQueueOffsetPattern.ReplaceAllString(line, "queueOffset=<queueOffset>")
+	return line
+}
+
+var sendMessageRowMsgIDPattern = regexp.MustCompile(`^(\S+\s+\d+\s+\S+\s+)[0-9A-Z]+$`)
+
+// normalizeSendMessageShadowOutput 仅屏蔽 sendMessage 发送结果表的数据行 MsgId。
+func normalizeSendMessageShadowOutput(output ShadowOutput) ShadowOutput {
+	output.Stdout = normalizeShadowTextLines(output.Stdout, normalizeSendMessageShadowLine)
+	return output
+}
+
+func normalizeSendMessageShadowLine(line string) string {
+	if sendMessageRowMsgIDPattern.MatchString(line) {
+		return sendMessageRowMsgIDPattern.ReplaceAllString(line, `${1}<msgId>`)
+	}
+	return line
 }
 
 func normalizeShadowTextLines(text string, fn func(string) string) string {

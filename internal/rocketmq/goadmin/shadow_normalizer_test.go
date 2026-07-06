@@ -183,3 +183,81 @@ func TestNormalizeShadowOutputForProducerHidesLastUpdateTimestamp(t *testing.T) 
 		t.Fatalf("expected producer timestamps to normalize equally\nfirst=%q\nsecond=%q", first.Stdout, second.Stdout)
 	}
 }
+
+func TestNormalizeShadowOutputForCheckMsgSendRTHidesOnlyRTColumns(t *testing.T) {
+	first := normalizeShadowOutputForCommand("checkMsgSendRT", shadowComparableOutput{
+		Stdout: "#Broker Name                      #QID  #Send Result            #RT\n" +
+			"broker-a                          0     true                    8\n" +
+			"broker-a                          1     true                    13\n" +
+			"Avg RT: 12.50\n",
+	}, DefaultM6ShadowNormalizer())
+	second := normalizeShadowOutputForCommand("checkMsgSendRT", shadowComparableOutput{
+		Stdout: "#Broker Name                      #QID  #Send Result            #RT\n" +
+			"broker-a                          0     true                    123\n" +
+			"broker-a                          1     true                    4\n" +
+			"Avg RT: 4.00\n",
+	}, DefaultM6ShadowNormalizer())
+
+	expected := "#Broker Name                      #QID  #Send Result            #RT\n" +
+		"broker-a                          0     true                    <rt>\n" +
+		"broker-a                          1     true                    <rt>\n" +
+		"Avg RT: <rt>\n"
+	if first.Stdout != expected {
+		t.Fatalf("unexpected checkMsgSendRT normalized stdout\nexpected=%q\nactual=%q", expected, first.Stdout)
+	}
+	if first.Stdout != second.Stdout {
+		t.Fatalf("expected checkMsgSendRT RT values to normalize equally\nfirst=%q\nsecond=%q", first.Stdout, second.Stdout)
+	}
+
+	unchanged := normalizeShadowOutputForCommand("topicStatus", shadowComparableOutput{Stdout: "Avg RT: 12.50\n"}, DefaultM6ShadowNormalizer())
+	if unchanged.Stdout != "Avg RT: 12.50\n" {
+		t.Fatalf("expected non-checkMsgSendRT command to preserve Avg RT text, got %q", unchanged.Stdout)
+	}
+}
+
+func TestNormalizeShadowOutputForSendMsgStatusHidesDynamicSendResultFields(t *testing.T) {
+	first := normalizeShadowOutputForCommand("sendMsgStatus", shadowComparableOutput{
+		Stdout: "rt=7ms, SendResult=SendResult [sendStatus=SEND_OK, msgId=AC180002018F1152471119E69A780001, offsetMsgId=AC18000400002A9F000000005740AA95, messageQueue=MessageQueue [topic=55924048bd08, brokerName=55924048bd08, queueId=0], queueOffset=155225, recallHandle=null]\n",
+	}, DefaultM6ShadowNormalizer())
+	second := normalizeShadowOutputForCommand("sendMsgStatus", shadowComparableOutput{
+		Stdout: "rt=3ms, SendResult=SendResult [sendStatus=SEND_OK, msgId=AC18000201C11152471119E6A92F0001, offsetMsgId=AC18000400002A9F000000005740AD44, messageQueue=MessageQueue [topic=55924048bd08, brokerName=55924048bd08, queueId=0], queueOffset=155228, recallHandle=null]\n",
+	}, DefaultM6ShadowNormalizer())
+
+	expected := "rt=<rt>ms, SendResult=SendResult [sendStatus=SEND_OK, msgId=<msgId>, offsetMsgId=<offsetMsgId>, messageQueue=MessageQueue [topic=55924048bd08, brokerName=55924048bd08, queueId=0], queueOffset=<offset>, recallHandle=null]\n"
+	if first.Stdout != expected {
+		t.Fatalf("unexpected sendMsgStatus normalized stdout\nexpected=%q\nactual=%q", expected, first.Stdout)
+	}
+	if first.Stdout != second.Stdout {
+		t.Fatalf("expected sendMsgStatus dynamic fields to normalize equally\nfirst=%q\nsecond=%q", first.Stdout, second.Stdout)
+	}
+
+	unchanged := normalizeShadowOutputForCommand("sendMessage", shadowComparableOutput{Stdout: "rt=7ms, msgId=AC180002018F1152471119E69A780001\n"}, DefaultM6ShadowNormalizer())
+	if unchanged.Stdout != "rt=7ms, msgId=AC180002018F1152471119E69A780001\n" {
+		t.Fatalf("expected non-sendMsgStatus command to preserve sendMsgStatus-like text, got %q", unchanged.Stdout)
+	}
+}
+
+func TestNormalizeShadowOutputForSendMessageHidesOnlyResultRowMsgID(t *testing.T) {
+	first := normalizeShadowOutputForCommand("sendMessage", shadowComparableOutput{
+		Stdout: "#Broker Name                      #QID  #Send Result            #MsgId\n" +
+			"55924048bd08                      0     SEND_OK                 AC180002013C1152471119F2CF470000\n",
+	}, DefaultM6ShadowNormalizer())
+	second := normalizeShadowOutputForCommand("sendMessage", shadowComparableOutput{
+		Stdout: "#Broker Name                      #QID  #Send Result            #MsgId\n" +
+			"55924048bd08                      0     SEND_OK                 AC180002013C1152471119F2D1230001\n",
+	}, DefaultM6ShadowNormalizer())
+
+	expected := "#Broker Name                      #QID  #Send Result            #MsgId\n" +
+		"55924048bd08                      0     SEND_OK                 <msgId>\n"
+	if first.Stdout != expected {
+		t.Fatalf("unexpected sendMessage normalized stdout\nexpected=%q\nactual=%q", expected, first.Stdout)
+	}
+	if first.Stdout != second.Stdout {
+		t.Fatalf("expected sendMessage MsgId values to normalize equally\nfirst=%q\nsecond=%q", first.Stdout, second.Stdout)
+	}
+
+	unchanged := normalizeShadowOutputForCommand("sendMessage", shadowComparableOutput{Stdout: "rt=7ms, msgId=AC180002018F1152471119E69A780001\n"}, DefaultM6ShadowNormalizer())
+	if unchanged.Stdout != "rt=7ms, msgId=AC180002018F1152471119E69A780001\n" {
+		t.Fatalf("expected sendMessage normalizer to preserve non-table msgId text, got %q", unchanged.Stdout)
+	}
+}

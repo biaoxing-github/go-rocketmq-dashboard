@@ -30,6 +30,10 @@ func TestDefaultM6ShadowPlanIsValid(t *testing.T) {
 		"consumer-connection":                  false,
 		"list-user":                            false,
 		"get-user":                             false,
+		"create-user":                          false,
+		"update-user":                          false,
+		"copy-user":                            false,
+		"copy-acl":                             false,
 		"list-acl":                             false,
 		"get-acl":                              false,
 		"controller-metadata":                  false,
@@ -47,6 +51,17 @@ func TestDefaultM6ShadowPlanIsValid(t *testing.T) {
 		"print-message-queue":                  false,
 		"consume-message":                      false,
 		"query-consume-queue":                  false,
+		"check-msg-send-rt":                    false,
+		"send-msg-status":                      false,
+		"send-message":                         false,
+		"send-message-trace":                   false,
+		"reset-master-flush-offset":            false,
+		"clean-expired-cq":                     false,
+		"clean-expired-cq-c":                   false,
+		"clean-unused-topic":                   false,
+		"clean-unused-topic-c":                 false,
+		"delete-expired-commit-log":            false,
+		"delete-expired-commit-log-c":          false,
 		"check-rocksdb-cq-write-progress":      false,
 		"dump-compaction-log":                  false,
 		"export-pop-record":                    false,
@@ -67,6 +82,8 @@ func TestDefaultM6ShadowPlanIsValid(t *testing.T) {
 		"export-configs":                       false,
 		"export-metadata":                      false,
 		"export-metrics":                       false,
+		"update-namesrv-config":                false,
+		"update-broker-config":                 false,
 		"wipe-write-perm":                      false,
 		"add-write-perm":                       false,
 		"update-kv-config":                     false,
@@ -119,10 +136,27 @@ func TestDefaultM6ShadowPlanSerializesMutationTargets(t *testing.T) {
 		command   string
 		noteToken string
 	}{
-		"wipe-write-perm":  {command: "wipeWritePerm", noteToken: "恢复"},
-		"add-write-perm":   {command: "addWritePerm", noteToken: "恢复"},
-		"update-kv-config": {command: "updateKvConfig", noteToken: "清理"},
-		"delete-kv-config": {command: "deleteKvConfig", noteToken: "预置"},
+		"wipe-write-perm":             {command: "wipeWritePerm", noteToken: "恢复"},
+		"add-write-perm":              {command: "addWritePerm", noteToken: "恢复"},
+		"update-kv-config":            {command: "updateKvConfig", noteToken: "清理"},
+		"delete-kv-config":            {command: "deleteKvConfig", noteToken: "预置"},
+		"create-user":                 {command: "createUser", noteToken: "清理"},
+		"update-user":                 {command: "updateUser", noteToken: "预置"},
+		"copy-user":                   {command: "copyUser", noteToken: "清理"},
+		"copy-acl":                    {command: "copyAcl", noteToken: "预置"},
+		"check-msg-send-rt":           {command: "checkMsgSendRT", noteToken: "串行"},
+		"send-msg-status":             {command: "sendMsgStatus", noteToken: "串行"},
+		"send-message":                {command: "sendMessage", noteToken: "串行"},
+		"send-message-trace":          {command: "sendMessage", noteToken: "串行"},
+		"reset-master-flush-offset":   {command: "resetMasterFlushOffset", noteToken: "串行"},
+		"clean-expired-cq":            {command: "cleanExpiredCQ", noteToken: "串行"},
+		"clean-expired-cq-c":          {command: "cleanExpiredCQ", noteToken: "串行"},
+		"clean-unused-topic":          {command: "cleanUnusedTopic", noteToken: "串行"},
+		"clean-unused-topic-c":        {command: "cleanUnusedTopic", noteToken: "串行"},
+		"delete-expired-commit-log":   {command: "deleteExpiredCommitLog", noteToken: "串行"},
+		"delete-expired-commit-log-c": {command: "deleteExpiredCommitLog", noteToken: "串行"},
+		"update-namesrv-config":       {command: "updateNamesrvConfig", noteToken: "恢复"},
+		"update-broker-config":        {command: "updateBrokerConfig", noteToken: "恢复"},
 	}
 	for _, sample := range DefaultM6ShadowPlan() {
 		expectation, ok := required[sample.Name]
@@ -207,8 +241,8 @@ func TestApplyShadowFixtureOverridesMarksConcreteSamplesExecutable(t *testing.T)
 
 	plan := PlanShadowBatch(samples)
 
-	if plan.ExecutableSamples != 2 || plan.SkippedSamples != 59 {
-		t.Fatalf("expected 2 executable and 59 skipped samples, got executable=%d skipped=%d plan=%#v",
+	if plan.ExecutableSamples != 2 || plan.SkippedSamples != 76 {
+		t.Fatalf("expected 2 executable and 76 skipped samples, got executable=%d skipped=%d plan=%#v",
 			plan.ExecutableSamples, plan.SkippedSamples, plan)
 	}
 	if plan.Executable[0].Name != "known-message" {
@@ -260,8 +294,8 @@ func TestApplyShadowFixtureOverridesExpandsRepeatedFixtures(t *testing.T) {
 	}
 	plan := PlanShadowBatch(samples)
 
-	if plan.ExecutableSamples != 20 || plan.SkippedSamples != 60 {
-		t.Fatalf("expected repeat fixture to expand to 20 executable samples and 60 skipped samples, got executable=%d skipped=%d plan=%#v",
+	if plan.ExecutableSamples != 20 || plan.SkippedSamples != 77 {
+		t.Fatalf("expected repeat fixture to expand to 20 executable samples and 77 skipped samples, got executable=%d skipped=%d plan=%#v",
 			plan.ExecutableSamples, plan.SkippedSamples, plan)
 	}
 	for index, sample := range plan.Executable {

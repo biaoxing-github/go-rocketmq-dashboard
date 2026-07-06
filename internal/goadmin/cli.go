@@ -663,10 +663,20 @@ func runM6ShadowBatch(ctx context.Context, options Options, fixturesJSON string,
 	}
 	beforeRun := chainM6ShadowHooks(
 		m6ShadowWritePermBeforeRun(options),
+		m6ShadowNamesrvConfigBeforeRun(options),
+		m6ShadowBrokerConfigBeforeRun(options),
 		m6ShadowKVBeforeRun(options),
+		m6ShadowUpdateUserBeforeRun(options),
+		m6ShadowCreateUserBeforeRun(options),
+		m6ShadowCopyUserBeforeRun(options),
 	)
 	afterRun := chainM6ShadowHooks(
+		m6ShadowCopyUserAfterRun(options),
+		m6ShadowCreateUserAfterRun(options),
+		m6ShadowUpdateUserAfterRun(options),
 		m6ShadowKVAfterRun(options),
+		m6ShadowBrokerConfigAfterRun(options),
+		m6ShadowNamesrvConfigAfterRun(options),
 		m6ShadowWritePermAfterRun(options),
 	)
 	batch := nativeadmin.ShadowBatch{
@@ -783,6 +793,127 @@ func m6ShadowWritePermArgs(args []string, command string) ([]string, bool) {
 	return restoreArgs, true
 }
 
+// m6ShadowNamesrvConfigBeforeRun 将 updateNamesrvConfig 样本恢复到固定 baseline，确保每路 provider 从同一动态配置值开始。
+func m6ShadowNamesrvConfigBeforeRun(options Options) func(context.Context, []string) error {
+	return func(ctx context.Context, args []string) error {
+		resetArgs, ok := m6ShadowNamesrvConfigResetArgs(args)
+		if !ok {
+			return nil
+		}
+		return runM6ShadowNamesrvConfigCommand(ctx, options, args, resetArgs, "before")
+	}
+}
+
+// m6ShadowNamesrvConfigAfterRun 将 updateNamesrvConfig 样本写过的隔离 key 恢复到固定 baseline。
+func m6ShadowNamesrvConfigAfterRun(options Options) func(context.Context, []string) error {
+	return func(ctx context.Context, args []string) error {
+		resetArgs, ok := m6ShadowNamesrvConfigResetArgs(args)
+		if !ok {
+			return nil
+		}
+		return runM6ShadowNamesrvConfigCommand(ctx, options, args, resetArgs, "after")
+	}
+}
+
+// runM6ShadowNamesrvConfigCommand 执行 NameServer 配置恢复命令，恢复耗时不计入 provider duration。
+func runM6ShadowNamesrvConfigCommand(ctx context.Context, options Options, originalArgs []string, resetArgs []string, phase string) error {
+	if options.Runner != nil {
+		resetOptions := options
+		resetOptions.Transport = "process"
+		output, err := runM6ShadowCommand(ctx, resetOptions, resetArgs)
+		if err != nil {
+			return fmt.Errorf("run namesrv config fixture command %s %s %s: stdout=%q stderr=%q: %w",
+				strings.Join(resetArgs, " "), phase, commandName(originalArgs), output.Stdout, output.Stderr, err)
+		}
+		return nil
+	}
+	resetArgs = injectNameServer(resetArgs, options.NameServer)
+	_, supported, err := nativeCommandRunner(ctx, resetArgs, options.Timeout)
+	if !supported {
+		return fmt.Errorf("native namesrv config fixture command does not support %q", commandName(resetArgs))
+	}
+	if err != nil {
+		return fmt.Errorf("run namesrv config fixture command %s %s %s: %w",
+			strings.Join(resetArgs, " "), phase, commandName(originalArgs), err)
+	}
+	return nil
+}
+
+func m6ShadowNamesrvConfigResetArgs(args []string) ([]string, bool) {
+	if !strings.EqualFold(commandName(args), "updateNamesrvConfig") {
+		return nil, false
+	}
+	key := cliStringArg(args[1:], "-k", "--key")
+	if strings.TrimSpace(key) == "" {
+		return nil, false
+	}
+	resetArgs := []string{"updateNamesrvConfig"}
+	if nameServers := cliStringArg(args[1:], "-n", "--namesrvAddr"); strings.TrimSpace(nameServers) != "" {
+		resetArgs = append(resetArgs, "-n", nameServers)
+	}
+	resetArgs = append(resetArgs, "-k", key, "-v", "m6-shadow-namesrv-baseline")
+	return resetArgs, true
+}
+
+// m6ShadowBrokerConfigBeforeRun 将 updateBrokerConfig 样本恢复到固定 baseline，确保每路 provider 从同一 Broker 动态配置值开始。
+func m6ShadowBrokerConfigBeforeRun(options Options) func(context.Context, []string) error {
+	return func(ctx context.Context, args []string) error {
+		resetArgs, ok := m6ShadowBrokerConfigResetArgs(args)
+		if !ok {
+			return nil
+		}
+		return runM6ShadowBrokerConfigCommand(ctx, options, args, resetArgs, "before")
+	}
+}
+
+// m6ShadowBrokerConfigAfterRun 将 updateBrokerConfig 样本写过的隔离 key 恢复到固定 baseline。
+func m6ShadowBrokerConfigAfterRun(options Options) func(context.Context, []string) error {
+	return func(ctx context.Context, args []string) error {
+		resetArgs, ok := m6ShadowBrokerConfigResetArgs(args)
+		if !ok {
+			return nil
+		}
+		return runM6ShadowBrokerConfigCommand(ctx, options, args, resetArgs, "after")
+	}
+}
+
+// runM6ShadowBrokerConfigCommand 执行 Broker 配置恢复命令，恢复耗时不计入 provider duration。
+func runM6ShadowBrokerConfigCommand(ctx context.Context, options Options, originalArgs []string, resetArgs []string, phase string) error {
+	if options.Runner != nil {
+		resetOptions := options
+		resetOptions.Transport = "process"
+		output, err := runM6ShadowCommand(ctx, resetOptions, resetArgs)
+		if err != nil {
+			return fmt.Errorf("run broker config fixture command %s %s %s: stdout=%q stderr=%q: %w",
+				strings.Join(resetArgs, " "), phase, commandName(originalArgs), output.Stdout, output.Stderr, err)
+		}
+		return nil
+	}
+	resetArgs = injectNameServer(resetArgs, options.NameServer)
+	_, supported, err := nativeCommandRunner(ctx, resetArgs, options.Timeout)
+	if !supported {
+		return fmt.Errorf("native broker config fixture command does not support %q", commandName(resetArgs))
+	}
+	if err != nil {
+		return fmt.Errorf("run broker config fixture command %s %s %s: %w",
+			strings.Join(resetArgs, " "), phase, commandName(originalArgs), err)
+	}
+	return nil
+}
+
+func m6ShadowBrokerConfigResetArgs(args []string) ([]string, bool) {
+	if !strings.EqualFold(commandName(args), "updateBrokerConfig") {
+		return nil, false
+	}
+	brokerAddr := cliStringArg(args[1:], "-b", "--brokerAddr")
+	key := cliStringArg(args[1:], "-k", "--key")
+	if strings.TrimSpace(brokerAddr) == "" || strings.TrimSpace(key) == "" {
+		return nil, false
+	}
+	resetArgs := []string{"updateBrokerConfig", "-b", brokerAddr, "-k", key, "-v", "m6-shadow-broker-baseline"}
+	return resetArgs, true
+}
+
 // m6ShadowKVBeforeRun 为 deleteKvConfig 样本预置同一 namespace/key，确保每路 provider 都删除真实存在的 KV。
 func m6ShadowKVBeforeRun(options Options) func(context.Context, []string) error {
 	return func(ctx context.Context, args []string) error {
@@ -859,6 +990,137 @@ func m6ShadowKVArgs(args []string, command string, value string) ([]string, bool
 		kvArgs = append(kvArgs, "-v", value)
 	}
 	return kvArgs, true
+}
+
+// m6ShadowUpdateUserBeforeRun 为 updateUser 样本恢复目标用户状态，确保每路 provider 都从 enable baseline 更新。
+func m6ShadowUpdateUserBeforeRun(options Options) func(context.Context, []string) error {
+	return func(ctx context.Context, args []string) error {
+		resetArgs, ok := m6ShadowUpdateUserResetArgs(args)
+		if !ok {
+			return nil
+		}
+		return runM6ShadowAuthUserCleanup(ctx, options, args, resetArgs, "before")
+	}
+}
+
+// m6ShadowUpdateUserAfterRun 将 updateUser 样本修改过的目标用户状态恢复为 enable。
+func m6ShadowUpdateUserAfterRun(options Options) func(context.Context, []string) error {
+	return func(ctx context.Context, args []string) error {
+		resetArgs, ok := m6ShadowUpdateUserResetArgs(args)
+		if !ok {
+			return nil
+		}
+		return runM6ShadowAuthUserCleanup(ctx, options, args, resetArgs, "after")
+	}
+}
+
+// m6ShadowCreateUserBeforeRun 为 createUser 样本删除目标用户，确保每路 provider 都执行真实创建路径。
+func m6ShadowCreateUserBeforeRun(options Options) func(context.Context, []string) error {
+	return func(ctx context.Context, args []string) error {
+		cleanupArgs, ok := m6ShadowCreateUserCleanupArgs(args)
+		if !ok {
+			return nil
+		}
+		return runM6ShadowAuthUserCleanup(ctx, options, args, cleanupArgs, "before")
+	}
+}
+
+// m6ShadowCreateUserAfterRun 清理 createUser 留在目标 broker 的用户元数据，保持 fixture 可重复执行。
+func m6ShadowCreateUserAfterRun(options Options) func(context.Context, []string) error {
+	return func(ctx context.Context, args []string) error {
+		cleanupArgs, ok := m6ShadowCreateUserCleanupArgs(args)
+		if !ok {
+			return nil
+		}
+		return runM6ShadowAuthUserCleanup(ctx, options, args, cleanupArgs, "after")
+	}
+}
+
+// m6ShadowCopyUserBeforeRun 为 copyUser 样本删除目标用户，确保每路 provider 都执行 create 路径。
+func m6ShadowCopyUserBeforeRun(options Options) func(context.Context, []string) error {
+	return func(ctx context.Context, args []string) error {
+		cleanupArgs, ok := m6ShadowCopyUserCleanupArgs(args)
+		if !ok {
+			return nil
+		}
+		return runM6ShadowAuthUserCleanup(ctx, options, args, cleanupArgs, "before")
+	}
+}
+
+// m6ShadowCopyUserAfterRun 清理 copyUser 留在目标 broker 的用户元数据，保持 fixture 可重复执行。
+func m6ShadowCopyUserAfterRun(options Options) func(context.Context, []string) error {
+	return func(ctx context.Context, args []string) error {
+		cleanupArgs, ok := m6ShadowCopyUserCleanupArgs(args)
+		if !ok {
+			return nil
+		}
+		return runM6ShadowAuthUserCleanup(ctx, options, args, cleanupArgs, "after")
+	}
+}
+
+// runM6ShadowAuthUserCleanup 通过注入 runner 或原生 remoting 删除目标用户，耗时不计入 provider duration。
+func runM6ShadowAuthUserCleanup(ctx context.Context, options Options, originalArgs []string, cleanupArgs []string, phase string) error {
+	if options.Runner != nil {
+		cleanupOptions := options
+		cleanupOptions.Transport = "process"
+		output, err := runM6ShadowCommand(ctx, cleanupOptions, cleanupArgs)
+		if err != nil {
+			return fmt.Errorf("cleanup auth user fixture with %s %s %s: stdout=%q stderr=%q: %w",
+				strings.Join(cleanupArgs, " "), phase, commandName(originalArgs), output.Stdout, output.Stderr, err)
+		}
+		return nil
+	}
+	_, supported, err := nativeCommandRunner(ctx, cleanupArgs, options.Timeout)
+	if !supported {
+		return fmt.Errorf("native auth user cleanup does not support %q", commandName(cleanupArgs))
+	}
+	if err != nil {
+		return fmt.Errorf("cleanup auth user fixture with %s %s %s: %w",
+			strings.Join(cleanupArgs, " "), phase, commandName(originalArgs), err)
+	}
+	return nil
+}
+
+// m6ShadowUpdateUserResetArgs 从 updateUser 原命令复制目标 broker 和用户名，生成 userStatus baseline 恢复命令。
+func m6ShadowUpdateUserResetArgs(args []string) ([]string, bool) {
+	if !strings.EqualFold(commandName(args), "updateUser") {
+		return nil, false
+	}
+	targetBroker := cliStringArg(args[1:], "-b", "--brokerAddr")
+	username := cliStringArg(args[1:], "-u", "--username")
+	if strings.TrimSpace(targetBroker) == "" || strings.TrimSpace(username) == "" {
+		return nil, false
+	}
+	resetArgs := []string{"updateUser", "-b", targetBroker, "-u", username, "-s", "enable"}
+	return resetArgs, true
+}
+
+// m6ShadowCreateUserCleanupArgs 从 createUser 原命令复制目标 broker 和用户名，生成 deleteUser 清理命令。
+func m6ShadowCreateUserCleanupArgs(args []string) ([]string, bool) {
+	if !strings.EqualFold(commandName(args), "createUser") {
+		return nil, false
+	}
+	targetBroker := cliStringArg(args[1:], "-b", "--brokerAddr")
+	username := cliStringArg(args[1:], "-u", "--username")
+	if strings.TrimSpace(targetBroker) == "" || strings.TrimSpace(username) == "" {
+		return nil, false
+	}
+	cleanupArgs := []string{"deleteUser", "-b", targetBroker, "-u", username}
+	return cleanupArgs, true
+}
+
+// m6ShadowCopyUserCleanupArgs 从 copyUser 原命令复制目标 broker 和用户名，生成 deleteUser 清理命令。
+func m6ShadowCopyUserCleanupArgs(args []string) ([]string, bool) {
+	if !strings.EqualFold(commandName(args), "copyUser") {
+		return nil, false
+	}
+	targetBroker := cliStringArg(args[1:], "-t", "--toBroker")
+	usernames := cliStringArg(args[1:], "-u", "--usernames")
+	if strings.TrimSpace(targetBroker) == "" || strings.TrimSpace(usernames) == "" {
+		return nil, false
+	}
+	cleanupArgs := []string{"deleteUser", "-b", targetBroker, "-u", usernames}
+	return cleanupArgs, true
 }
 
 type m6ShadowTransportRunner struct {
