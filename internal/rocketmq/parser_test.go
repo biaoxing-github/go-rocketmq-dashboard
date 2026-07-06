@@ -181,6 +181,100 @@ func TestBuildClusterFeatureReportInfersTransactionsAndTrace(t *testing.T) {
 	}
 }
 
+func TestBuildClusterFeatureReportAddsCommonChineseConfigPanels(t *testing.T) {
+	clusters := []Cluster{{
+		Name: "DefaultCluster",
+		Brokers: []Broker{{
+			Cluster: "DefaultCluster",
+			Name:    "broker-a",
+			ID:      "0",
+			Address: "127.0.0.1:10911",
+			Version: "V5_3_2",
+		}},
+	}}
+	config := BrokerConfigSnapshotFromEntries(clusters[0].Brokers[0], []ConfigEntry{
+		{Key: "brokerRole", Value: "ASYNC_MASTER"},
+		{Key: "flushDiskType", Value: "ASYNC_FLUSH"},
+		{Key: "transactionCheckInterval", Value: "30000"},
+		{Key: "transactionCheckMax", Value: "15"},
+		{Key: "autoCreateTopicEnable", Value: "false"},
+		{Key: "traceTopicEnable", Value: "true"},
+	})
+
+	report := BuildClusterFeatureReport("127.0.0.1:9876", clusters, nil, []BrokerConfigSnapshot{config}, nil, nil)
+
+	items := commonConfigItemsForTest(report.CommonConfigPanels)
+	if items["transactionCheckInterval"].Label != "事务回查间隔" || !strings.Contains(items["transactionCheckInterval"].Description, "事务半消息") {
+		t.Fatalf("expected transactionCheckInterval Chinese explanation, got %#v", items["transactionCheckInterval"])
+	}
+	if items["autoCreateTopicEnable"].Status != "disabled" || !strings.Contains(items["autoCreateTopicEnable"].Impact, "自动创建") {
+		t.Fatalf("expected autoCreateTopicEnable disabled interpretation, got %#v", items["autoCreateTopicEnable"])
+	}
+	if items["traceTopicEnable"].Status != "enabled" {
+		t.Fatalf("expected traceTopicEnable enabled status, got %#v", items["traceTopicEnable"])
+	}
+}
+
+func TestBuildTransactionRuntimeReportSummarizesQueuesAndOperationSamples(t *testing.T) {
+	halfStatus := TopicStatus{
+		Topic:             "RMQ_SYS_TRANS_HALF_TOPIC",
+		TotalQueues:       1,
+		TotalMessageCount: 4,
+		MinOffsetTotal:    10,
+		MaxOffsetTotal:    14,
+		Rows: []TopicStatusRow{{
+			BrokerName:   "broker-a",
+			QueueID:      0,
+			MinOffset:    10,
+			MaxOffset:    14,
+			MessageCount: 4,
+			LastUpdated:  "2026-07-06 10:00:00,000",
+		}},
+	}
+	opStatus := TopicStatus{
+		Topic:             "RMQ_SYS_TRANS_OP_HALF_TOPIC",
+		TotalQueues:       1,
+		TotalMessageCount: 3,
+		MinOffsetTotal:    20,
+		MaxOffsetTotal:    23,
+		Rows: []TopicStatusRow{{
+			BrokerName:   "broker-a",
+			QueueID:      0,
+			MinOffset:    20,
+			MaxOffset:    23,
+			MessageCount: 3,
+			LastUpdated:  "2026-07-06 10:01:00,000",
+		}},
+	}
+	operations := []MessageDetail{
+		{MessageID: "commit-msg", Topic: "RMQ_SYS_TRANS_OP_HALF_TOPIC", BrokerName: "broker-a", QueueID: 0, QueueOffset: 22, StoreTimestamp: 1783303260000, BodyPreview: "COMMIT_MESSAGE"},
+		{MessageID: "rollback-msg", Topic: "RMQ_SYS_TRANS_OP_HALF_TOPIC", BrokerName: "broker-a", QueueID: 0, QueueOffset: 21, StoreTimestamp: 1783303200000, BodyPreview: "ROLLBACK_MESSAGE"},
+		{MessageID: "remove-msg", Topic: "RMQ_SYS_TRANS_OP_HALF_TOPIC", BrokerName: "broker-a", QueueID: 0, QueueOffset: 20, StoreTimestamp: 1783303140000, BodyPreview: "d"},
+	}
+
+	report := BuildTransactionRuntimeReport(&halfStatus, &opStatus, operations, nil)
+
+	if !report.Supported || report.HalfTopic.TotalMessageCount != 4 || report.OpTopic.TotalMessageCount != 3 {
+		t.Fatalf("expected transaction topic status summary, got %#v", report)
+	}
+	if report.CommitCount != 1 || report.RollbackCount != 1 || report.CleanupCount != 1 || report.UnknownCount != 0 {
+		t.Fatalf("expected operation counts, got %#v", report)
+	}
+	if len(report.RecentOperations) != 3 || report.RecentOperations[1].Operation != "rollback" {
+		t.Fatalf("expected classified operation samples, got %#v", report.RecentOperations)
+	}
+}
+
+func commonConfigItemsForTest(panels []CommonConfigPanel) map[string]CommonConfigItem {
+	items := make(map[string]CommonConfigItem)
+	for _, panel := range panels {
+		for _, item := range panel.Items {
+			items[item.Key] = item
+		}
+	}
+	return items
+}
+
 func TestParseTopicRouteReadsJsonRouteData(t *testing.T) {
 	output := `{
   "queueDatas": [

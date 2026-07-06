@@ -236,6 +236,43 @@ clusterTest                                       =  false`,
 	}
 }
 
+func TestClusterFeaturesCollectsTransactionRuntimeStatusAndSamples(t *testing.T) {
+	runner := newRecordingCommandRunner(map[string]string{
+		"clusterList": `#Cluster Name           #Broker Name            #BID  #Addr                  #Version              #InTPS(LOAD)                   #OutTPS(LOAD)  #Timer(Progress)        #PCWait(ms)  #Hour         #SPACE    #ACTIVATED
+DefaultCluster          broker-a                0     127.0.0.1:10911     V5_3_2                 0.00(0,0ms)               0.00(0,0ms|N,Nms)  0-0(0.0w, 0.0, 0.0)               0  1446.72       0.1200          true`,
+		"topicList": `RMQ_SYS_TRANS_HALF_TOPIC
+RMQ_SYS_TRANS_OP_HALF_TOPIC`,
+		"getBrokerConfig": `============127.0.0.1:10911============
+brokerName                                        =  broker-a
+brokerRole                                        =  ASYNC_MASTER
+transactionCheckInterval                          =  30000
+transactionCheckMax                               =  15`,
+		"getNamesrvConfig": `============127.0.0.1:9876============
+rocketmqHome                                      =  /opt/rocketmq`,
+		"topicStatus":      topicStatusOutputForTest("broker-a", 0, 20, 21),
+		"queryMsgByOffset": messageDetailOutputForTest("7F00000100002A9F00000000000123AC", "RMQ_SYS_TRANS_OP_HALF_TOPIC", 0, 20),
+	})
+	provider := &MQAdminProvider{NameServer: "127.0.0.1:9876", CommandRunner: runner}
+
+	report, err := provider.ClusterFeatures(context.Background())
+	if err != nil {
+		t.Fatalf("ClusterFeatures returned error: %v", err)
+	}
+	if !report.TransactionRuntime.Supported || report.TransactionRuntime.OpTopic.TotalMessageCount != 1 {
+		t.Fatalf("expected transaction runtime status, got %#v", report.TransactionRuntime)
+	}
+	if len(report.TransactionRuntime.RecentOperations) != 1 || report.TransactionRuntime.RecentOperations[0].MessageID == "" {
+		t.Fatalf("expected recent transaction operation sample, got %#v", report.TransactionRuntime.RecentOperations)
+	}
+	if runner.countCommand("topicStatus") != 2 || runner.countCommand("queryMsgByOffset") != 1 {
+		t.Fatalf("expected transaction topic status and sample commands, calls=%#v", runner.commands())
+	}
+	topics := topicArgsForTest(t, runner.commands())
+	if !reflect.DeepEqual(topics, []string{"RMQ_SYS_TRANS_HALF_TOPIC", "RMQ_SYS_TRANS_OP_HALF_TOPIC"}) {
+		t.Fatalf("expected transaction status topics, got %#v", topics)
+	}
+}
+
 func TestSearchMessageByKeyUsesNarrowDefaultWindow(t *testing.T) {
 	runner := newRecordingCommandRunner(map[string]string{
 		"queryMsgByKey":     "7F00000100002A9F00000000000123AB 3 10240\n",
@@ -486,6 +523,18 @@ func (r *recordingCommandRunner) firstCommand(command string) []string {
 
 func (r *recordingCommandRunner) commands() [][]string {
 	return append([][]string(nil), r.calls...)
+}
+
+func topicArgsForTest(t *testing.T, calls [][]string) []string {
+	t.Helper()
+	topics := make([]string, 0)
+	for _, call := range calls {
+		if len(call) == 0 || call[0] != "topicStatus" {
+			continue
+		}
+		topics = append(topics, stringArgForTest(t, call, "-t"))
+	}
+	return topics
 }
 
 func messageDetailOutputForTest(messageID string, topic string, queueID int, queueOffset int64) string {

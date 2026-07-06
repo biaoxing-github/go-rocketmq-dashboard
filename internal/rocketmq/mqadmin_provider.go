@@ -415,7 +415,11 @@ func (p *MQAdminProvider) ClusterFeatures(ctx context.Context) (ClusterFeatureRe
 		}
 	}
 
-	return BuildClusterFeatureReport(p.NameServer, clusters, topics, brokerConfigs, nameServerConfigs, warnings), nil
+	transactionRuntime, transactionWarnings := p.clusterTransactionRuntime(ctx, topics)
+	warnings = append(warnings, transactionWarnings...)
+	report := BuildClusterFeatureReport(p.NameServer, clusters, topics, brokerConfigs, nameServerConfigs, warnings)
+	report.TransactionRuntime = transactionRuntime
+	return report, nil
 }
 
 func flattenConfigSections(sections []ConfigSection) []ConfigEntry {
@@ -424,6 +428,48 @@ func flattenConfigSections(sections []ConfigSection) []ConfigEntry {
 		entries = append(entries, section.Entries...)
 	}
 	return entries
+}
+
+func (p *MQAdminProvider) clusterTransactionRuntime(ctx context.Context, topics []Topic) (TransactionRuntimeReport, []string) {
+	warnings := make([]string, 0)
+	var halfStatus *TopicStatus
+	var opStatus *TopicStatus
+	if topicListContains(topics, "RMQ_SYS_TRANS_HALF_TOPIC") {
+		status, err := p.TopicStatus(ctx, "RMQ_SYS_TRANS_HALF_TOPIC")
+		if err != nil {
+			warnings = append(warnings, "事务半消息 Topic 水位读取失败: "+err.Error())
+		} else {
+			halfStatus = &status
+		}
+	}
+	if topicListContains(topics, "RMQ_SYS_TRANS_OP_HALF_TOPIC") {
+		status, err := p.TopicStatus(ctx, "RMQ_SYS_TRANS_OP_HALF_TOPIC")
+		if err != nil {
+			warnings = append(warnings, "事务操作消息 Topic 水位读取失败: "+err.Error())
+		} else {
+			opStatus = &status
+		}
+	}
+	operations := []MessageDetail(nil)
+	if opStatus != nil && opStatus.TotalMessageCount > 0 {
+		messages, err := collectTopicMessagesByOffset(ctx, MessageBrowseQuery{Topic: "RMQ_SYS_TRANS_OP_HALF_TOPIC", QueueID: -1, Limit: 12}, opStatus.Rows, TopicMessages{}, p.messageByOffset)
+		if err != nil {
+			warnings = append(warnings, "事务操作消息样本读取失败: "+err.Error())
+		} else {
+			operations = messages.Rows
+			warnings = append(warnings, messages.Warnings...)
+		}
+	}
+	return BuildTransactionRuntimeReport(halfStatus, opStatus, operations, warnings), warnings
+}
+
+func topicListContains(topics []Topic, name string) bool {
+	for _, topic := range topics {
+		if topic.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 // MessageChain 查询单条消息详情，并叠加 trace 与指定消费者组位点，形成可视化状态链路。

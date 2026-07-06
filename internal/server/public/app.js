@@ -696,6 +696,8 @@ function renderFeatures(payload) {
   renderFeatureSummary(report);
   renderCapabilityGrid(report);
   renderFeatureWarnings(report.warnings || []);
+  renderTransactionRuntime(report.transactionRuntime || {});
+  renderCommonConfigPanels(report.commonConfigPanels || []);
   renderSystemTopics(report.systemTopics || []);
   renderNameServerConfigGroups(report.nameServerConfigs || []);
   renderBrokerConfigGroups(report.brokerConfigs || []);
@@ -756,6 +758,165 @@ function renderFeatureWarnings(warnings) {
   }
   container.hidden = false;
   container.innerHTML = warnings.map((warning) => `<span class="pill pill-warn">${escapeHTML(warning)}</span>`).join("");
+}
+
+function renderTransactionRuntime(runtime) {
+  const operations = runtime.recentOperations || [];
+  const warnings = runtime.warnings || [];
+  const topics = [runtime.halfTopic, runtime.opTopic].filter(Boolean);
+  $("#transactionRuntimeCount").textContent = `${operations.length} 个样本`;
+  if (!runtime.supported && !topics.some((topic) => topic?.present)) {
+    $("#transactionRuntimePanel").innerHTML = `<div class="empty-state">未采集到事务系统 Topic 运行态。</div>`;
+    return;
+  }
+  const summary = [
+    ["事务支持", runtime.supported ? "已发现" : "部分"],
+    ["半消息水位", formatCount(runtime.halfTopic?.totalMessageCount)],
+    ["操作消息水位", formatCount(runtime.opTopic?.totalMessageCount)],
+    ["提交样本", formatCount(runtime.commitCount)],
+    ["回滚样本", formatCount(runtime.rollbackCount)],
+    ["清理/未识别", `${formatCount(runtime.cleanupCount)} / ${formatCount(runtime.unknownCount)}`]
+  ];
+  $("#transactionRuntimePanel").innerHTML = `
+    <div class="transaction-summary-grid">
+      ${summary.map(([label, value]) => `<div><span>${escapeHTML(label)}</span><strong>${escapeHTML(value)}</strong></div>`).join("")}
+    </div>
+    <p class="transaction-runtime-detail">${escapeHTML(runtime.detail || "-")}</p>
+    ${warnings.length ? `<div class="feature-warnings transaction-warnings">${warnings.map((warning) => `<span class="pill pill-warn">${escapeHTML(warning)}</span>`).join("")}</div>` : ""}
+    <div class="transaction-topic-grid">
+      ${topics.map(transactionTopicHTML).join("")}
+    </div>
+    <div class="transaction-operations">
+      <div class="detail-section-head">
+        <h4>近期事务操作消息样本</h4>
+        <span>${escapeHTML(operations.length)} 条</span>
+      </div>
+      ${transactionOperationTableHTML(operations)}
+    </div>
+  `;
+}
+
+function transactionTopicHTML(topic) {
+  const rows = topic.rows || [];
+  return `
+    <article class="transaction-topic-box">
+      <div class="transaction-topic-head">
+        <span>${escapeHTML(topic.label || topic.topic || "事务 Topic")}</span>
+        <strong>${escapeHTML(topic.present ? "已采集" : "未采集")}</strong>
+      </div>
+      <div class="summary-grid transaction-topic-metrics">
+        <div><span>队列</span><strong>${escapeHTML(topic.totalQueues || 0)}</strong></div>
+        <div><span>消息数</span><strong>${escapeHTML(formatCount(topic.totalMessageCount))}</strong></div>
+        <div><span>最小位点</span><strong>${escapeHTML(formatCount(topic.minOffsetTotal))}</strong></div>
+        <div><span>最大位点</span><strong>${escapeHTML(formatCount(topic.maxOffsetTotal))}</strong></div>
+      </div>
+      <div class="transaction-topic-updated">最近写入：${escapeHTML(topic.latestUpdated || "-")}</div>
+      ${transactionTopicRowsHTML(rows)}
+    </article>
+  `;
+}
+
+function transactionTopicRowsHTML(rows) {
+  const visibleRows = rows.slice(0, 4).map((row) => `
+    <tr>
+      ${tableCell("Broker", escapeHTML(row.brokerName || "-"), "mono wrap-cell")}
+      ${tableCell("QID", escapeHTML(row.queueId ?? "-"), "mono")}
+      ${tableCell("消息数", escapeHTML(formatCount(row.messageCount)), "mono")}
+      ${tableCell("更新时间", escapeHTML(row.lastUpdated || "-"), "mono wrap-cell")}
+    </tr>
+  `).join("");
+  return dataTableHTML(["Broker", "QID", "消息数", "更新时间"], visibleRows, "暂无队列水位。");
+}
+
+function transactionOperationTableHTML(operations) {
+  const rows = operations.map((item) => `
+    <tr>
+      ${tableCell("操作", `<span class="pill ${transactionOperationClass(item.operation)}">${escapeHTML(item.operationLabel || "-")}</span>`)}
+      ${tableCell("MessageID", escapeHTML(item.messageId || "-"), "mono wrap-cell")}
+      ${tableCell("队列", escapeHTML(`${item.brokerName || "-"} / ${item.queueId ?? "-"} / ${item.queueOffset ?? "-"}`), "mono wrap-cell")}
+      ${tableCell("存储时间", escapeHTML(formatTime(item.storeTimestamp)), "mono wrap-cell")}
+      ${tableCell("证据", escapeHTML((item.evidence || []).join("；") || item.bodyPreview || "-"), "wrap-cell")}
+    </tr>
+  `).join("");
+  return dataTableHTML(["操作", "MessageID", "队列", "存储时间", "证据"], rows, "暂无可回查的事务操作样本。");
+}
+
+function transactionOperationClass(operation) {
+  switch (operation) {
+    case "commit":
+      return "pill-ok";
+    case "rollback":
+      return "pill-warn";
+    case "cleanup":
+      return "pill-info";
+    default:
+      return "pill-muted";
+  }
+}
+
+function renderCommonConfigPanels(panels) {
+  const total = panels.reduce((sum, panel) => sum + (panel.items?.length || 0), 0);
+  $("#commonConfigPanelCount").textContent = `${panels.length} 类 / ${total} 项`;
+  if (!panels.length) {
+    $("#commonConfigPanels").innerHTML = `<div class="empty-state">暂无常用配置项。</div>`;
+    return;
+  }
+  $("#commonConfigPanels").innerHTML = panels.map((panel) => `
+    <section class="common-config-group">
+      <div class="common-config-head">
+        <h4>${escapeHTML(panel.category || "常用配置")}</h4>
+        <span>${escapeHTML(panel.items?.length || 0)} 项</span>
+      </div>
+      <div class="common-config-grid">
+        ${(panel.items || []).map(commonConfigItemHTML).join("")}
+      </div>
+    </section>
+  `).join("");
+}
+
+function commonConfigItemHTML(item) {
+  const evidence = (item.evidence || []).slice(0, 2);
+  return `
+    <article class="common-config-item common-config-${escapeAttr(item.status || "unknown")}">
+      <div class="common-config-title">
+        <span>${escapeHTML(item.label || item.key)}</span>
+        <em class="pill ${commonConfigPillClass(item.status)}">${escapeHTML(commonConfigStatusText(item.status))}</em>
+      </div>
+      <strong class="mono">${escapeHTML(item.value || "-")}</strong>
+      <p>${escapeHTML(item.description || "-")}</p>
+      <small>${escapeHTML(item.impact || "-")}</small>
+      ${evidence.length ? `<ul>${evidence.map((entry) => `<li>${escapeHTML(entry)}</li>`).join("")}</ul>` : ""}
+    </article>
+  `;
+}
+
+function commonConfigStatusText(status) {
+  switch (status) {
+    case "enabled":
+      return "开启";
+    case "disabled":
+      return "关闭";
+    case "mixed":
+      return "不一致";
+    case "configured":
+      return "已配置";
+    default:
+      return "-";
+  }
+}
+
+function commonConfigPillClass(status) {
+  switch (status) {
+    case "enabled":
+    case "configured":
+      return "pill-ok";
+    case "mixed":
+      return "pill-warn";
+    case "disabled":
+      return "pill-muted";
+    default:
+      return "pill-info";
+  }
 }
 
 function renderSystemTopics(topics) {

@@ -74,6 +74,8 @@ type ClusterFeatureReport struct {
 	SystemTopicCount     int                        `json:"systemTopicCount"`
 	Capabilities         []FeatureCapability        `json:"capabilities"`
 	SystemTopics         []FeatureTopic             `json:"systemTopics"`
+	TransactionRuntime   TransactionRuntimeReport   `json:"transactionRuntime"`
+	CommonConfigPanels   []CommonConfigPanel        `json:"commonConfigPanels"`
 	BrokerConfigs        []BrokerConfigSnapshot     `json:"brokerConfigs"`
 	NameServerConfigs    []NameServerConfigSnapshot `json:"nameServerConfigs"`
 	Warnings             []string                   `json:"warnings"`
@@ -86,6 +88,102 @@ type FeatureCapability struct {
 	Category string   `json:"category"`
 	Status   string   `json:"status"`
 	Detail   string   `json:"detail"`
+	Evidence []string `json:"evidence"`
+}
+
+// TransactionRuntimeReport 表示事务系统 Topic 的队列水位、操作消息样本和可识别提交/回滚证据。
+type TransactionRuntimeReport struct {
+	// Supported 表示半消息 Topic 与操作消息 Topic 是否都能从当前 NameServer 查到运行态。
+	Supported bool `json:"supported"`
+	// Detail 是给页面展示的事务运行态说明。
+	Detail string `json:"detail"`
+	// HalfTopic 是 RMQ_SYS_TRANS_HALF_TOPIC 的队列水位摘要。
+	HalfTopic TransactionTopicRuntime `json:"halfTopic"`
+	// OpTopic 是 RMQ_SYS_TRANS_OP_HALF_TOPIC 的队列水位摘要。
+	OpTopic TransactionTopicRuntime `json:"opTopic"`
+	// CommitCount 是近期操作样本里能明确识别为提交的数量。
+	CommitCount int `json:"commitCount"`
+	// RollbackCount 是近期操作样本里能明确识别为回滚的数量。
+	RollbackCount int `json:"rollbackCount"`
+	// CleanupCount 是近期操作样本里只能识别为半消息清理标记的数量。
+	CleanupCount int `json:"cleanupCount"`
+	// UnknownCount 是近期操作样本里无法识别操作语义的数量。
+	UnknownCount int `json:"unknownCount"`
+	// RecentOperations 是从操作消息 Topic 最近位点回查到的样本。
+	RecentOperations []TransactionOperationSample `json:"recentOperations"`
+	// Warnings 记录事务运行态采集或语义识别的非致命问题。
+	Warnings []string `json:"warnings"`
+}
+
+// TransactionTopicRuntime 表示一个事务系统 Topic 的聚合队列水位。
+type TransactionTopicRuntime struct {
+	// Topic 是事务系统 Topic 名称。
+	Topic string `json:"topic"`
+	// Label 是页面展示的中文名称。
+	Label string `json:"label"`
+	// Present 表示该 Topic 的 topicStatus 是否采集成功。
+	Present bool `json:"present"`
+	// TotalQueues 是该 Topic 的队列数量。
+	TotalQueues int `json:"totalQueues"`
+	// TotalMessageCount 是所有队列 maxOffset-minOffset 的合计。
+	TotalMessageCount int64 `json:"totalMessageCount"`
+	// MinOffsetTotal 是所有队列最小位点合计。
+	MinOffsetTotal int64 `json:"minOffsetTotal"`
+	// MaxOffsetTotal 是所有队列最大位点合计。
+	MaxOffsetTotal int64 `json:"maxOffsetTotal"`
+	// LatestUpdated 是各队列最后更新时间里的最大值文本。
+	LatestUpdated string `json:"latestUpdated"`
+	// Rows 是原始队列水位行，用于页面展开查看。
+	Rows []TopicStatusRow `json:"rows"`
+}
+
+// TransactionOperationSample 表示一条事务操作消息样本及其分类结果。
+type TransactionOperationSample struct {
+	// MessageID 是操作消息的 OffsetID 或消息 ID。
+	MessageID string `json:"messageId"`
+	// Operation 是机器可读分类：commit、rollback、cleanup 或 unknown。
+	Operation string `json:"operation"`
+	// OperationLabel 是页面展示的中文分类。
+	OperationLabel string `json:"operationLabel"`
+	// BrokerName 是样本所在 Broker。
+	BrokerName string `json:"brokerName"`
+	// QueueID 是样本所在队列 ID。
+	QueueID int `json:"queueId"`
+	// QueueOffset 是样本所在队列位点。
+	QueueOffset int64 `json:"queueOffset"`
+	// StoreTimestamp 是 Broker 存储时间戳。
+	StoreTimestamp int64 `json:"storeTimestamp"`
+	// Keys 是操作消息携带的 key 列表。
+	Keys []string `json:"keys"`
+	// BodyPreview 是操作消息体预览。
+	BodyPreview string `json:"bodyPreview"`
+	// Evidence 是用于解释分类依据的短文本。
+	Evidence []string `json:"evidence"`
+}
+
+// CommonConfigPanel 按中文业务类别聚合常用 Broker 配置。
+type CommonConfigPanel struct {
+	// Category 是中文配置分类。
+	Category string `json:"category"`
+	// Items 是该分类下已在 Broker 配置中出现的常用配置项。
+	Items []CommonConfigItem `json:"items"`
+}
+
+// CommonConfigItem 表示一个常用配置的中文说明、当前值和影响。
+type CommonConfigItem struct {
+	// Key 是 RocketMQ 原始配置键。
+	Key string `json:"key"`
+	// Label 是配置项中文名。
+	Label string `json:"label"`
+	// Value 是聚合后的当前配置值。
+	Value string `json:"value"`
+	// Status 是机器可读状态：enabled、disabled、mixed、configured 或 unknown。
+	Status string `json:"status"`
+	// Description 说明配置项控制的能力或行为。
+	Description string `json:"description"`
+	// Impact 说明该配置对日常运维和业务行为的影响。
+	Impact string `json:"impact"`
+	// Evidence 保留各 Broker 的实际 key=value 来源。
 	Evidence []string `json:"evidence"`
 }
 

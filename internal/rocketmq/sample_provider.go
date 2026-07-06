@@ -98,7 +98,15 @@ func (p SampleProvider) ClusterFeatures(ctx context.Context) (ClusterFeatureRepo
 			{Key: "clusterTest", Value: "false"},
 		},
 	}}
-	return BuildClusterFeatureReport("127.0.0.1:9876", clusters, topics, brokerConfigs, nameServerConfigs, nil), nil
+	report := BuildClusterFeatureReport("127.0.0.1:9876", clusters, topics, brokerConfigs, nameServerConfigs, nil)
+	halfStatus := sampleTransactionTopicStatus("RMQ_SYS_TRANS_HALF_TOPIC", 18, 7, "2026-07-06 10:08:00,000")
+	opStatus := sampleTransactionTopicStatus("RMQ_SYS_TRANS_OP_HALF_TOPIC", 42, 12, "2026-07-06 10:10:00,000")
+	report.TransactionRuntime = BuildTransactionRuntimeReport(&halfStatus, &opStatus, []MessageDetail{
+		{MessageID: "sample-trans-op-commit", Topic: "RMQ_SYS_TRANS_OP_HALF_TOPIC", BrokerName: "broker-a", QueueID: 0, QueueOffset: 41, StoreTimestamp: time.Now().Add(-2 * time.Minute).UnixMilli(), BodyPreview: "COMMIT_MESSAGE"},
+		{MessageID: "sample-trans-op-rollback", Topic: "RMQ_SYS_TRANS_OP_HALF_TOPIC", BrokerName: "broker-a", QueueID: 1, QueueOffset: 40, StoreTimestamp: time.Now().Add(-6 * time.Minute).UnixMilli(), BodyPreview: "ROLLBACK_MESSAGE"},
+		{MessageID: "sample-trans-op-cleanup", Topic: "RMQ_SYS_TRANS_OP_HALF_TOPIC", BrokerName: "broker-a", QueueID: 2, QueueOffset: 39, StoreTimestamp: time.Now().Add(-12 * time.Minute).UnixMilli(), BodyPreview: "d"},
+	}, nil)
+	return report, nil
 }
 
 // TopicList 返回样例 Topic 列表。
@@ -146,6 +154,21 @@ func (p SampleProvider) TopicStatus(ctx context.Context, topic string) (TopicSta
 			{BrokerName: "broker-a", QueueID: 3, MinOffset: 0, MaxOffset: 2, MessageCount: 2, LastUpdated: "2026-06-05 22:04:56,759"},
 		},
 	}, nil
+}
+
+func sampleTransactionTopicStatus(topic string, maxOffset int64, count int64, lastUpdated string) TopicStatus {
+	return TopicStatus{
+		Topic:             topic,
+		TotalQueues:       3,
+		TotalMessageCount: count,
+		MinOffsetTotal:    maxOffset - count,
+		MaxOffsetTotal:    maxOffset,
+		Rows: []TopicStatusRow{
+			{BrokerName: "broker-a", QueueID: 0, MinOffset: maxOffset - count, MaxOffset: maxOffset - count + 2, MessageCount: 2, LastUpdated: lastUpdated},
+			{BrokerName: "broker-a", QueueID: 1, MinOffset: maxOffset - count + 2, MaxOffset: maxOffset - count + 5, MessageCount: 3, LastUpdated: lastUpdated},
+			{BrokerName: "broker-a", QueueID: 2, MinOffset: maxOffset - count + 5, MaxOffset: maxOffset, MessageCount: count - 5, LastUpdated: lastUpdated},
+		},
+	}
 }
 
 // TopicMessages 返回样例 Topic 消息，帮助前端验证“Topic -> 消息 -> 链路”的点击流程。
