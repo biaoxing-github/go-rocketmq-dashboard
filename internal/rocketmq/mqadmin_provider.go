@@ -450,6 +450,16 @@ func (p *MQAdminProvider) clusterTransactionRuntime(ctx context.Context, topics 
 			opStatus = &status
 		}
 	}
+	halfMessages := []MessageDetail(nil)
+	if halfStatus != nil && halfStatus.TotalMessageCount > 0 {
+		messages, err := collectOldestTopicMessagesByOffset(ctx, MessageBrowseQuery{Topic: "RMQ_SYS_TRANS_HALF_TOPIC", QueueID: -1, Limit: 8}, halfStatus.Rows, p.messageByOffset)
+		if err != nil {
+			warnings = append(warnings, "事务半消息待决样本读取失败: "+err.Error())
+		} else {
+			halfMessages = messages.Rows
+			warnings = append(warnings, messages.Warnings...)
+		}
+	}
 	operations := []MessageDetail(nil)
 	if opStatus != nil && opStatus.TotalMessageCount > 0 {
 		messages, err := collectTopicMessagesByOffset(ctx, MessageBrowseQuery{Topic: "RMQ_SYS_TRANS_OP_HALF_TOPIC", QueueID: -1, Limit: 12}, opStatus.Rows, TopicMessages{}, p.messageByOffset)
@@ -460,7 +470,53 @@ func (p *MQAdminProvider) clusterTransactionRuntime(ctx context.Context, topics 
 			warnings = append(warnings, messages.Warnings...)
 		}
 	}
-	return BuildTransactionRuntimeReport(halfStatus, opStatus, operations, warnings), warnings
+	consumerImpact := BuildTransactionConsumerImpact(nil, topics)
+	groups, err := p.ConsumerGroups(ctx)
+	if err != nil {
+		warnings = append(warnings, "消费组汇总读取失败: "+err.Error())
+		consumerImpact.Warnings = append(consumerImpact.Warnings, err.Error())
+	} else {
+		consumerImpact = BuildTransactionConsumerImpact(groups, topics)
+	}
+	return BuildTransactionRuntimeReport(halfStatus, opStatus, halfMessages, operations, consumerImpact, warnings), warnings
+}
+
+// collectOldestTopicMessagesByOffset 按队列最小位点向后采样，专门用于估算半消息最老待决时间。
+func collectOldestTopicMessagesByOffset(ctx context.Context, query MessageBrowseQuery, rows []TopicStatusRow, messageByOffset messageByOffsetFunc) (TopicMessages, error) {
+	query = normalizeBrowseQuery(query)
+	result := TopicMessages{
+		Topic:      query.Topic,
+		BrokerName: query.BrokerName,
+		QueueID:    query.QueueID,
+		Limit:      query.Limit,
+		Rows:       make([]MessageDetail, 0, query.Limit),
+		Warnings:   make([]string, 0),
+	}
+	perQueueLimit := perQueueBrowseLimit(query.Limit, len(rows))
+	for _, row := range rows {
+		scannedInQueue := 0
+		for offset := row.MinOffset; offset < row.MaxOffset && scannedInQueue < perQueueLimit; offset++ {
+			result.ScannedOffsets++
+			scannedInQueue++
+			result.FetchedOffsets++
+			message, err := messageByOffset(ctx, query.Topic, row.BrokerName, row.QueueID, offset)
+			if err != nil {
+				result.Warnings = append(result.Warnings, fmt.Sprintf("%s/%d/%d: %s", row.BrokerName, row.QueueID, offset, err.Error()))
+				continue
+			}
+			result.Rows = append(result.Rows, message)
+		}
+	}
+	sort.SliceStable(result.Rows, func(left int, right int) bool {
+		return result.Rows[left].StoreTimestamp < result.Rows[right].StoreTimestamp
+	})
+	if len(result.Rows) > query.Limit {
+		result.Rows = result.Rows[:query.Limit]
+	}
+	if len(result.Rows) == 0 {
+		return result, errors.New("未回查到可展示消息")
+	}
+	return result, nil
 }
 
 func topicListContains(topics []Topic, name string) bool {

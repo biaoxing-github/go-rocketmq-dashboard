@@ -665,16 +665,36 @@ func runM6ShadowBatch(ctx context.Context, options Options, fixturesJSON string,
 		m6ShadowWritePermBeforeRun(options),
 		m6ShadowNamesrvConfigBeforeRun(options),
 		m6ShadowBrokerConfigBeforeRun(options),
+		m6ShadowColdDataFlowCtrBeforeRun(options),
+		m6ShadowUpdateTopicBeforeRun(options),
+		m6ShadowDeleteTopicBeforeRun(options),
+		m6ShadowUpdateSubGroupBeforeRun(options),
+		m6ShadowDeleteSubGroupBeforeRun(options),
 		m6ShadowKVBeforeRun(options),
 		m6ShadowUpdateUserBeforeRun(options),
 		m6ShadowCreateUserBeforeRun(options),
 		m6ShadowCopyUserBeforeRun(options),
+		m6ShadowCreateAclBeforeRun(options),
+		m6ShadowUpdateAclBeforeRun(options),
+		m6ShadowDeleteAclBeforeRun(options),
+		m6ShadowListAclBeforeRun(options),
+		m6ShadowGetAclBeforeRun(options),
 	)
 	afterRun := chainM6ShadowHooks(
+		m6ShadowGetAclAfterRun(options),
+		m6ShadowListAclAfterRun(options),
+		m6ShadowDeleteAclAfterRun(options),
+		m6ShadowUpdateAclAfterRun(options),
+		m6ShadowCreateAclAfterRun(options),
 		m6ShadowCopyUserAfterRun(options),
 		m6ShadowCreateUserAfterRun(options),
 		m6ShadowUpdateUserAfterRun(options),
 		m6ShadowKVAfterRun(options),
+		m6ShadowDeleteSubGroupAfterRun(options),
+		m6ShadowUpdateSubGroupAfterRun(options),
+		m6ShadowDeleteTopicAfterRun(options),
+		m6ShadowUpdateTopicAfterRun(options),
+		m6ShadowColdDataFlowCtrAfterRun(options),
 		m6ShadowBrokerConfigAfterRun(options),
 		m6ShadowNamesrvConfigAfterRun(options),
 		m6ShadowWritePermAfterRun(options),
@@ -914,6 +934,334 @@ func m6ShadowBrokerConfigResetArgs(args []string) ([]string, bool) {
 	return resetArgs, true
 }
 
+// m6ShadowColdDataFlowCtrBeforeRun 为冷数据流控 mutation 样本准备同一初始状态。
+func m6ShadowColdDataFlowCtrBeforeRun(options Options) func(context.Context, []string) error {
+	return func(ctx context.Context, args []string) error {
+		fixtureArgs, ok := m6ShadowColdDataFlowCtrBeforeArgs(args)
+		if !ok {
+			return nil
+		}
+		return runM6ShadowColdDataFlowCtrCommand(ctx, options, args, fixtureArgs, "before")
+	}
+}
+
+// m6ShadowColdDataFlowCtrAfterRun 清理冷数据流控 mutation 样本留下的目标 group，保持 fixture 可重复执行。
+func m6ShadowColdDataFlowCtrAfterRun(options Options) func(context.Context, []string) error {
+	return func(ctx context.Context, args []string) error {
+		cleanupArgs, ok := m6ShadowColdDataFlowCtrCleanupArgs(args)
+		if !ok {
+			return nil
+		}
+		return runM6ShadowColdDataFlowCtrCommand(ctx, options, args, cleanupArgs, "after")
+	}
+}
+
+// runM6ShadowColdDataFlowCtrCommand 执行冷数据流控阈值清理命令，清理耗时不计入 provider duration。
+func runM6ShadowColdDataFlowCtrCommand(ctx context.Context, options Options, originalArgs []string, cleanupArgs []string, phase string) error {
+	if options.Runner != nil {
+		cleanupOptions := options
+		cleanupOptions.Transport = "process"
+		output, err := runM6ShadowCommand(ctx, cleanupOptions, cleanupArgs)
+		if err != nil {
+			return fmt.Errorf("run cold data flow ctr fixture command %s %s %s: stdout=%q stderr=%q: %w",
+				strings.Join(cleanupArgs, " "), phase, commandName(originalArgs), output.Stdout, output.Stderr, err)
+		}
+		return nil
+	}
+	cleanupArgs = injectNameServer(cleanupArgs, options.NameServer)
+	_, supported, err := nativeCommandRunner(ctx, cleanupArgs, options.Timeout)
+	if !supported {
+		return fmt.Errorf("native cold data flow ctr fixture command does not support %q", commandName(cleanupArgs))
+	}
+	if err != nil {
+		return fmt.Errorf("run cold data flow ctr fixture command %s %s %s: %w",
+			strings.Join(cleanupArgs, " "), phase, commandName(originalArgs), err)
+	}
+	return nil
+}
+
+func m6ShadowColdDataFlowCtrBeforeArgs(args []string) ([]string, bool) {
+	switch strings.ToLower(commandName(args)) {
+	case "updatecolddataflowctrgroupconfig":
+		return m6ShadowColdDataFlowCtrCleanupArgs(args)
+	case "removecolddataflowctrgroupconfig":
+		return m6ShadowColdDataFlowCtrPrepareArgs(args)
+	default:
+		return nil, false
+	}
+}
+
+func m6ShadowColdDataFlowCtrCleanupArgs(args []string) ([]string, bool) {
+	switch strings.ToLower(commandName(args)) {
+	case "updatecolddataflowctrgroupconfig", "removecolddataflowctrgroupconfig":
+	default:
+		return nil, false
+	}
+	consumerGroup := cliStringArg(args[1:], "-g", "--consumerGroup")
+	if strings.TrimSpace(consumerGroup) == "" {
+		return nil, false
+	}
+	cleanupArgs := []string{"removeColdDataFlowCtrGroupConfig"}
+	brokerAddr := cliStringArg(args[1:], "-b", "--brokerAddr")
+	clusterName := cliStringArg(args[1:], "-c", "--clusterName")
+	switch {
+	case strings.TrimSpace(brokerAddr) != "":
+		cleanupArgs = append(cleanupArgs, "-b", brokerAddr)
+	case strings.TrimSpace(clusterName) != "":
+		if nameServers := cliStringArg(args[1:], "-n", "--namesrvAddr"); strings.TrimSpace(nameServers) != "" {
+			cleanupArgs = append(cleanupArgs, "-n", nameServers)
+		}
+		cleanupArgs = append(cleanupArgs, "-c", clusterName)
+	default:
+		return nil, false
+	}
+	cleanupArgs = append(cleanupArgs, "-g", consumerGroup)
+	return cleanupArgs, true
+}
+
+func m6ShadowColdDataFlowCtrPrepareArgs(args []string) ([]string, bool) {
+	if !strings.EqualFold(commandName(args), "removeColdDataFlowCtrGroupConfig") {
+		return nil, false
+	}
+	consumerGroup := cliStringArg(args[1:], "-g", "--consumerGroup")
+	if strings.TrimSpace(consumerGroup) == "" {
+		return nil, false
+	}
+	prepareArgs := []string{"updateColdDataFlowCtrGroupConfig"}
+	brokerAddr := cliStringArg(args[1:], "-b", "--brokerAddr")
+	clusterName := cliStringArg(args[1:], "-c", "--clusterName")
+	switch {
+	case strings.TrimSpace(brokerAddr) != "":
+		prepareArgs = append(prepareArgs, "-b", brokerAddr)
+	case strings.TrimSpace(clusterName) != "":
+		if nameServers := cliStringArg(args[1:], "-n", "--namesrvAddr"); strings.TrimSpace(nameServers) != "" {
+			prepareArgs = append(prepareArgs, "-n", nameServers)
+		}
+		prepareArgs = append(prepareArgs, "-c", clusterName)
+	default:
+		return nil, false
+	}
+	prepareArgs = append(prepareArgs, "-g", consumerGroup, "-v", "m6-shadow-cold-flow-threshold")
+	return prepareArgs, true
+}
+
+// m6ShadowDeleteTopicBeforeRun 为 deleteTopic 样本预置同一 Topic，确保每路 provider 都删除真实存在的 Topic。
+func m6ShadowDeleteTopicBeforeRun(options Options) func(context.Context, []string) error {
+	return func(ctx context.Context, args []string) error {
+		prepareArgs, ok := m6ShadowDeleteTopicPrepareArgs(args)
+		if !ok {
+			return nil
+		}
+		return runM6ShadowTopicFixtureCommand(ctx, options, args, prepareArgs, "before")
+	}
+}
+
+// m6ShadowDeleteTopicAfterRun 清理 deleteTopic 样本可能留下的 Topic 元数据，保持 fixture 可重复执行。
+func m6ShadowDeleteTopicAfterRun(options Options) func(context.Context, []string) error {
+	return func(ctx context.Context, args []string) error {
+		cleanupArgs, ok := m6ShadowDeleteTopicCleanupArgs(args)
+		if !ok {
+			return nil
+		}
+		return runM6ShadowTopicFixtureCommand(ctx, options, args, cleanupArgs, "after")
+	}
+}
+
+// m6ShadowUpdateTopicBeforeRun 清理 updateTopic 目标 Topic，确保每路 provider 都执行真实创建或更新路径。
+func m6ShadowUpdateTopicBeforeRun(options Options) func(context.Context, []string) error {
+	return func(ctx context.Context, args []string) error {
+		cleanupArgs, ok := m6ShadowUpdateTopicCleanupArgs(args)
+		if !ok {
+			return nil
+		}
+		return runM6ShadowTopicFixtureCommand(ctx, options, args, cleanupArgs, "before")
+	}
+}
+
+// m6ShadowUpdateTopicAfterRun 清理 updateTopic 写入的 Topic 元数据，保持 fixture 可重复执行。
+func m6ShadowUpdateTopicAfterRun(options Options) func(context.Context, []string) error {
+	return func(ctx context.Context, args []string) error {
+		cleanupArgs, ok := m6ShadowUpdateTopicCleanupArgs(args)
+		if !ok {
+			return nil
+		}
+		return runM6ShadowTopicFixtureCommand(ctx, options, args, cleanupArgs, "after")
+	}
+}
+
+// m6ShadowUpdateSubGroupBeforeRun 清理 updateSubGroup 目标订阅组，确保每路 provider 都执行真实创建或更新路径。
+func m6ShadowUpdateSubGroupBeforeRun(options Options) func(context.Context, []string) error {
+	return func(ctx context.Context, args []string) error {
+		cleanupArgs, ok := m6ShadowUpdateSubGroupCleanupArgs(args)
+		if !ok {
+			return nil
+		}
+		return runM6ShadowSubGroupFixtureCommand(ctx, options, args, cleanupArgs, "before")
+	}
+}
+
+// m6ShadowUpdateSubGroupAfterRun 清理 updateSubGroup 写入的订阅组元数据，保持 fixture 可重复执行。
+func m6ShadowUpdateSubGroupAfterRun(options Options) func(context.Context, []string) error {
+	return func(ctx context.Context, args []string) error {
+		cleanupArgs, ok := m6ShadowUpdateSubGroupCleanupArgs(args)
+		if !ok {
+			return nil
+		}
+		return runM6ShadowSubGroupFixtureCommand(ctx, options, args, cleanupArgs, "after")
+	}
+}
+
+// m6ShadowDeleteSubGroupBeforeRun 为 deleteSubGroup 样本预置订阅组，确保每路 provider 都删除真实存在的 group。
+func m6ShadowDeleteSubGroupBeforeRun(options Options) func(context.Context, []string) error {
+	return func(ctx context.Context, args []string) error {
+		prepareArgs, ok := m6ShadowDeleteSubGroupPrepareArgs(args)
+		if !ok {
+			return nil
+		}
+		return runM6ShadowSubGroupFixtureCommand(ctx, options, args, prepareArgs, "before")
+	}
+}
+
+// m6ShadowDeleteSubGroupAfterRun 清理 deleteSubGroup 样本可能留下的订阅组元数据，保持 fixture 可重复执行。
+func m6ShadowDeleteSubGroupAfterRun(options Options) func(context.Context, []string) error {
+	return func(ctx context.Context, args []string) error {
+		cleanupArgs, ok := m6ShadowDeleteSubGroupCleanupArgs(args)
+		if !ok {
+			return nil
+		}
+		return runM6ShadowSubGroupFixtureCommand(ctx, options, args, cleanupArgs, "after")
+	}
+}
+
+// runM6ShadowSubGroupFixtureCommand 执行订阅组 mutation 的准备或清理命令，耗时不计入 provider duration。
+func runM6ShadowSubGroupFixtureCommand(ctx context.Context, options Options, originalArgs []string, fixtureArgs []string, phase string) error {
+	if options.Runner != nil {
+		fixtureOptions := options
+		fixtureOptions.Transport = "process"
+		output, err := runM6ShadowCommand(ctx, fixtureOptions, fixtureArgs)
+		if err != nil {
+			return fmt.Errorf("run subscription group fixture command %s %s %s: stdout=%q stderr=%q: %w",
+				strings.Join(fixtureArgs, " "), phase, commandName(originalArgs), output.Stdout, output.Stderr, err)
+		}
+		return nil
+	}
+	fixtureArgs = injectNameServer(fixtureArgs, options.NameServer)
+	_, supported, err := nativeCommandRunner(ctx, fixtureArgs, options.Timeout)
+	if !supported {
+		return fmt.Errorf("native subscription group fixture command does not support %q", commandName(fixtureArgs))
+	}
+	if err != nil {
+		return fmt.Errorf("run subscription group fixture command %s %s %s: %w",
+			strings.Join(fixtureArgs, " "), phase, commandName(originalArgs), err)
+	}
+	return nil
+}
+
+// runM6ShadowTopicFixtureCommand 执行 Topic mutation 的准备或清理命令，耗时不计入 provider duration。
+func runM6ShadowTopicFixtureCommand(ctx context.Context, options Options, originalArgs []string, fixtureArgs []string, phase string) error {
+	if options.Runner != nil {
+		fixtureOptions := options
+		fixtureOptions.Transport = "process"
+		output, err := runM6ShadowCommand(ctx, fixtureOptions, fixtureArgs)
+		if err != nil {
+			return fmt.Errorf("run topic fixture command %s %s %s: stdout=%q stderr=%q: %w",
+				strings.Join(fixtureArgs, " "), phase, commandName(originalArgs), output.Stdout, output.Stderr, err)
+		}
+		return nil
+	}
+	fixtureArgs = injectNameServer(fixtureArgs, options.NameServer)
+	_, supported, err := nativeCommandRunner(ctx, fixtureArgs, options.Timeout)
+	if !supported {
+		return fmt.Errorf("native topic fixture command does not support %q", commandName(fixtureArgs))
+	}
+	if err != nil {
+		return fmt.Errorf("run topic fixture command %s %s %s: %w",
+			strings.Join(fixtureArgs, " "), phase, commandName(originalArgs), err)
+	}
+	return nil
+}
+
+func m6ShadowDeleteTopicPrepareArgs(args []string) ([]string, bool) {
+	if !strings.EqualFold(commandName(args), "deleteTopic") {
+		return nil, false
+	}
+	return m6ShadowDeleteTopicArgs(args, "updateTopic")
+}
+
+func m6ShadowDeleteTopicCleanupArgs(args []string) ([]string, bool) {
+	if !strings.EqualFold(commandName(args), "deleteTopic") {
+		return nil, false
+	}
+	return m6ShadowDeleteTopicArgs(args, "deleteTopic")
+}
+
+func m6ShadowUpdateTopicCleanupArgs(args []string) ([]string, bool) {
+	if !strings.EqualFold(commandName(args), "updateTopic") {
+		return nil, false
+	}
+	return m6ShadowDeleteTopicArgs(args, "deleteTopic")
+}
+
+func m6ShadowUpdateSubGroupCleanupArgs(args []string) ([]string, bool) {
+	if !strings.EqualFold(commandName(args), "updateSubGroup") {
+		return nil, false
+	}
+	return m6ShadowSubGroupArgs(args, "deleteSubGroup")
+}
+
+func m6ShadowDeleteSubGroupPrepareArgs(args []string) ([]string, bool) {
+	if !strings.EqualFold(commandName(args), "deleteSubGroup") {
+		return nil, false
+	}
+	return m6ShadowSubGroupArgs(args, "updateSubGroup")
+}
+
+func m6ShadowDeleteSubGroupCleanupArgs(args []string) ([]string, bool) {
+	if !strings.EqualFold(commandName(args), "deleteSubGroup") {
+		return nil, false
+	}
+	return m6ShadowSubGroupArgs(args, "deleteSubGroup")
+}
+
+// m6ShadowSubGroupArgs 从订阅组原命令复制 namesrv、broker/cluster 和 group，生成准备或清理命令。
+func m6ShadowSubGroupArgs(args []string, command string) ([]string, bool) {
+	groupName := cliStringArg(args[1:], "-g", "--groupName")
+	if strings.TrimSpace(groupName) == "" {
+		return nil, false
+	}
+	subGroupArgs := []string{command}
+	brokerAddr := cliStringArg(args[1:], "-b", "--brokerAddr")
+	clusterName := cliStringArg(args[1:], "-c", "--clusterName")
+	switch {
+	case strings.TrimSpace(brokerAddr) != "":
+		subGroupArgs = append(subGroupArgs, "-b", brokerAddr)
+	case strings.TrimSpace(clusterName) != "":
+		if nameServers := cliStringArg(args[1:], "-n", "--namesrvAddr"); strings.TrimSpace(nameServers) != "" {
+			subGroupArgs = append(subGroupArgs, "-n", nameServers)
+		}
+		subGroupArgs = append(subGroupArgs, "-c", clusterName)
+	default:
+		return nil, false
+	}
+	subGroupArgs = append(subGroupArgs, "-g", groupName)
+	return subGroupArgs, true
+}
+
+// m6ShadowDeleteTopicArgs 从 deleteTopic 原命令复制 namesrv、cluster 和 topic，生成 topic 准备或清理命令。
+func m6ShadowDeleteTopicArgs(args []string, command string) ([]string, bool) {
+	clusterName := cliStringArg(args[1:], "-c", "--clusterName", "--cluster")
+	topic := cliStringArg(args[1:], "-t", "--topic")
+	if strings.TrimSpace(clusterName) == "" || strings.TrimSpace(topic) == "" {
+		return nil, false
+	}
+	topicArgs := []string{command}
+	if nameServers := cliStringArg(args[1:], "-n", "--namesrvAddr"); strings.TrimSpace(nameServers) != "" {
+		topicArgs = append(topicArgs, "-n", nameServers)
+	}
+	topicArgs = append(topicArgs, "-c", clusterName, "-t", topic)
+	return topicArgs, true
+}
+
 // m6ShadowKVBeforeRun 为 deleteKvConfig 样本预置同一 namespace/key，确保每路 provider 都删除真实存在的 KV。
 func m6ShadowKVBeforeRun(options Options) func(context.Context, []string) error {
 	return func(ctx context.Context, args []string) error {
@@ -1058,6 +1406,155 @@ func m6ShadowCopyUserAfterRun(options Options) func(context.Context, []string) e
 	}
 }
 
+// m6ShadowCreateAclBeforeRun 为 createAcl 样本创建目标 User subject，确保官方 createAcl 走真实写入路径。
+func m6ShadowCreateAclBeforeRun(options Options) func(context.Context, []string) error {
+	return func(ctx context.Context, args []string) error {
+		deleteUserArgs, createUserArgs, ok := m6ShadowCreateAclPrepareArgs(args)
+		if !ok {
+			return nil
+		}
+		if err := runM6ShadowAclFixtureCommand(ctx, options, args, deleteUserArgs, "before"); err != nil {
+			return err
+		}
+		return runM6ShadowAclFixtureCommand(ctx, options, args, createUserArgs, "before")
+	}
+}
+
+// m6ShadowCreateAclAfterRun 清理 createAcl 写入的 ACL 与 seed 用户，保持每路 provider 初始状态一致。
+func m6ShadowCreateAclAfterRun(options Options) func(context.Context, []string) error {
+	return func(ctx context.Context, args []string) error {
+		deleteAclArgs, deleteUserArgs, ok := m6ShadowCreateAclCleanupArgs(args)
+		if !ok {
+			return nil
+		}
+		if err := runM6ShadowAclFixtureCommand(ctx, options, args, deleteAclArgs, "after"); err != nil {
+			return err
+		}
+		return runM6ShadowAclFixtureCommand(ctx, options, args, deleteUserArgs, "after")
+	}
+}
+
+// m6ShadowUpdateAclBeforeRun 为 updateAcl 样本重建 User subject 与 Pub/Allow ACL baseline，确保 provider 执行真实更新。
+func m6ShadowUpdateAclBeforeRun(options Options) func(context.Context, []string) error {
+	return func(ctx context.Context, args []string) error {
+		deleteUserArgs, createUserArgs, createAclArgs, ok := m6ShadowUpdateAclPrepareArgs(args)
+		if !ok {
+			return nil
+		}
+		if err := runM6ShadowAclFixtureCommand(ctx, options, args, deleteUserArgs, "before"); err != nil {
+			return err
+		}
+		if err := runM6ShadowAclFixtureCommand(ctx, options, args, createUserArgs, "before"); err != nil {
+			return err
+		}
+		return runM6ShadowAclFixtureCommand(ctx, options, args, createAclArgs, "before")
+	}
+}
+
+// m6ShadowUpdateAclAfterRun 清理 updateAcl 样本写入的 ACL 与 seed 用户，避免后续 provider 复用脏状态。
+func m6ShadowUpdateAclAfterRun(options Options) func(context.Context, []string) error {
+	return func(ctx context.Context, args []string) error {
+		deleteAclArgs, deleteUserArgs, ok := m6ShadowUpdateAclCleanupArgs(args)
+		if !ok {
+			return nil
+		}
+		if err := runM6ShadowAclFixtureCommand(ctx, options, args, deleteAclArgs, "after"); err != nil {
+			return err
+		}
+		return runM6ShadowAclFixtureCommand(ctx, options, args, deleteUserArgs, "after")
+	}
+}
+
+// m6ShadowDeleteAclBeforeRun 为 deleteAcl 样本重建 User subject 与 Pub/Allow ACL baseline，确保 provider 删除真实 ACL。
+func m6ShadowDeleteAclBeforeRun(options Options) func(context.Context, []string) error {
+	return func(ctx context.Context, args []string) error {
+		deleteUserArgs, createUserArgs, createAclArgs, ok := m6ShadowDeleteAclPrepareArgs(args)
+		if !ok {
+			return nil
+		}
+		if err := runM6ShadowAclFixtureCommand(ctx, options, args, deleteUserArgs, "before"); err != nil {
+			return err
+		}
+		if err := runM6ShadowAclFixtureCommand(ctx, options, args, createUserArgs, "before"); err != nil {
+			return err
+		}
+		return runM6ShadowAclFixtureCommand(ctx, options, args, createAclArgs, "before")
+	}
+}
+
+// m6ShadowDeleteAclAfterRun 清理 deleteAcl 样本使用的 seed 用户；目标 ACL 已由 provider 删除。
+func m6ShadowDeleteAclAfterRun(options Options) func(context.Context, []string) error {
+	return func(ctx context.Context, args []string) error {
+		deleteUserArgs, ok := m6ShadowDeleteAclCleanupArgs(args)
+		if !ok {
+			return nil
+		}
+		return runM6ShadowAclFixtureCommand(ctx, options, args, deleteUserArgs, "after")
+	}
+}
+
+// m6ShadowListAclBeforeRun 为 listAcl 样本重建 User subject 与 Pub/Allow ACL baseline，确保只读查询有稳定真实数据。
+func m6ShadowListAclBeforeRun(options Options) func(context.Context, []string) error {
+	return func(ctx context.Context, args []string) error {
+		deleteUserArgs, createUserArgs, createAclArgs, ok := m6ShadowListAclPrepareArgs(args)
+		if !ok {
+			return nil
+		}
+		if err := runM6ShadowAclFixtureCommand(ctx, options, args, deleteUserArgs, "before"); err != nil {
+			return err
+		}
+		if err := runM6ShadowAclFixtureCommand(ctx, options, args, createUserArgs, "before"); err != nil {
+			return err
+		}
+		return runM6ShadowAclFixtureCommand(ctx, options, args, createAclArgs, "before")
+	}
+}
+
+// m6ShadowListAclAfterRun 清理 listAcl 样本读取过的 ACL baseline 与 seed 用户，保持 fixture 可重复执行。
+func m6ShadowListAclAfterRun(options Options) func(context.Context, []string) error {
+	return func(ctx context.Context, args []string) error {
+		deleteAclArgs, deleteUserArgs, ok := m6ShadowListAclCleanupArgs(args)
+		if !ok {
+			return nil
+		}
+		if err := runM6ShadowAclFixtureCommand(ctx, options, args, deleteAclArgs, "after"); err != nil {
+			return err
+		}
+		return runM6ShadowAclFixtureCommand(ctx, options, args, deleteUserArgs, "after")
+	}
+}
+
+// m6ShadowGetAclBeforeRun 为 getAcl 样本重建 User subject 与 Pub/Allow ACL baseline，确保详情查询读取真实 ACL。
+func m6ShadowGetAclBeforeRun(options Options) func(context.Context, []string) error {
+	return func(ctx context.Context, args []string) error {
+		deleteUserArgs, createUserArgs, createAclArgs, ok := m6ShadowGetAclPrepareArgs(args)
+		if !ok {
+			return nil
+		}
+		if err := runM6ShadowAclFixtureCommand(ctx, options, args, deleteUserArgs, "before"); err != nil {
+			return err
+		}
+		if err := runM6ShadowAclFixtureCommand(ctx, options, args, createUserArgs, "before"); err != nil {
+			return err
+		}
+		return runM6ShadowAclFixtureCommand(ctx, options, args, createAclArgs, "before")
+	}
+}
+
+// m6ShadowGetAclAfterRun 清理 getAcl 样本读取过的 ACL baseline 与 seed 用户，保持 fixture 可重复执行。
+func m6ShadowGetAclAfterRun(options Options) func(context.Context, []string) error {
+	return func(ctx context.Context, args []string) error {
+		deleteAclArgs, deleteUserArgs, ok := m6ShadowGetAclCleanupArgs(args)
+		if !ok {
+			return nil
+		}
+		if err := runM6ShadowAclFixtureCommand(ctx, options, args, deleteAclArgs, "after"); err != nil {
+			return err
+		}
+		return runM6ShadowAclFixtureCommand(ctx, options, args, deleteUserArgs, "after")
+	}
+}
+
 // runM6ShadowAuthUserCleanup 通过注入 runner 或原生 remoting 删除目标用户，耗时不计入 provider duration。
 func runM6ShadowAuthUserCleanup(ctx context.Context, options Options, originalArgs []string, cleanupArgs []string, phase string) error {
 	if options.Runner != nil {
@@ -1077,6 +1574,29 @@ func runM6ShadowAuthUserCleanup(ctx context.Context, options Options, originalAr
 	if err != nil {
 		return fmt.Errorf("cleanup auth user fixture with %s %s %s: %w",
 			strings.Join(cleanupArgs, " "), phase, commandName(originalArgs), err)
+	}
+	return nil
+}
+
+// runM6ShadowAclFixtureCommand 执行 createAcl 样本的用户预置和 ACL 清理命令，耗时不计入 provider duration。
+func runM6ShadowAclFixtureCommand(ctx context.Context, options Options, originalArgs []string, fixtureArgs []string, phase string) error {
+	if options.Runner != nil {
+		fixtureOptions := options
+		fixtureOptions.Transport = "process"
+		output, err := runM6ShadowCommand(ctx, fixtureOptions, fixtureArgs)
+		if err != nil {
+			return fmt.Errorf("run acl fixture with %s %s %s: stdout=%q stderr=%q: %w",
+				strings.Join(fixtureArgs, " "), phase, commandName(originalArgs), output.Stdout, output.Stderr, err)
+		}
+		return nil
+	}
+	_, supported, err := nativeCommandRunner(ctx, fixtureArgs, options.Timeout)
+	if !supported {
+		return fmt.Errorf("native acl fixture command does not support %q", commandName(fixtureArgs))
+	}
+	if err != nil {
+		return fmt.Errorf("run acl fixture with %s %s %s: %w",
+			strings.Join(fixtureArgs, " "), phase, commandName(originalArgs), err)
 	}
 	return nil
 }
@@ -1121,6 +1641,218 @@ func m6ShadowCopyUserCleanupArgs(args []string) ([]string, bool) {
 	}
 	cleanupArgs := []string{"deleteUser", "-b", targetBroker, "-u", usernames}
 	return cleanupArgs, true
+}
+
+// m6ShadowCreateAclPrepareArgs 从 createAcl 原命令派生 seed 用户重建命令。
+func m6ShadowCreateAclPrepareArgs(args []string) ([]string, []string, bool) {
+	if !strings.EqualFold(commandName(args), "createAcl") {
+		return nil, nil, false
+	}
+	targetBroker := cliStringArg(args[1:], "-b", "--brokerAddr")
+	subject := cliStringArg(args[1:], "-s", "--subject")
+	username, ok := m6ShadowCreateAclUsername(subject)
+	if strings.TrimSpace(targetBroker) == "" || !ok {
+		return nil, nil, false
+	}
+	deleteUserArgs := []string{"deleteUser", "-b", targetBroker, "-u", username}
+	createUserArgs := []string{"createUser", "-b", targetBroker, "-u", username, "-p", "m6-shadow-acl-pass", "-t", "Super"}
+	return deleteUserArgs, createUserArgs, true
+}
+
+// m6ShadowCreateAclCleanupArgs 从 createAcl 原命令派生 ACL 与 seed 用户清理命令。
+func m6ShadowCreateAclCleanupArgs(args []string) ([]string, []string, bool) {
+	if !strings.EqualFold(commandName(args), "createAcl") {
+		return nil, nil, false
+	}
+	targetBroker := cliStringArg(args[1:], "-b", "--brokerAddr")
+	subject := cliStringArg(args[1:], "-s", "--subject")
+	resource := cliStringArg(args[1:], "-r", "--resources")
+	username, ok := m6ShadowCreateAclUsername(subject)
+	if strings.TrimSpace(targetBroker) == "" || !ok {
+		return nil, nil, false
+	}
+	deleteAclArgs := []string{"deleteAcl", "-b", targetBroker, "-s", subject}
+	if strings.TrimSpace(resource) != "" {
+		deleteAclArgs = append(deleteAclArgs, "-r", resource)
+	}
+	deleteUserArgs := []string{"deleteUser", "-b", targetBroker, "-u", username}
+	return deleteAclArgs, deleteUserArgs, true
+}
+
+// m6ShadowUpdateAclPrepareArgs 从 updateAcl 原命令派生 seed 用户与 ACL baseline 命令。
+func m6ShadowUpdateAclPrepareArgs(args []string) ([]string, []string, []string, bool) {
+	if !strings.EqualFold(commandName(args), "updateAcl") {
+		return nil, nil, nil, false
+	}
+	targetBroker := cliStringArg(args[1:], "-b", "--brokerAddr")
+	subject := cliStringArg(args[1:], "-s", "--subject")
+	resource := cliStringArg(args[1:], "-r", "--resources")
+	sourceIP := cliStringArg(args[1:], "-i", "--sourceIp")
+	username, ok := m6ShadowCreateAclUsername(subject)
+	if strings.TrimSpace(targetBroker) == "" || strings.TrimSpace(resource) == "" || !ok {
+		return nil, nil, nil, false
+	}
+	deleteUserArgs := []string{"deleteUser", "-b", targetBroker, "-u", username}
+	createUserArgs := []string{"createUser", "-b", targetBroker, "-u", username, "-p", "m6-shadow-acl-pass", "-t", "Super"}
+	createAclArgs := []string{"createAcl", "-b", targetBroker, "-s", subject, "-r", resource, "-a", "Pub", "-d", "Allow"}
+	if strings.TrimSpace(sourceIP) != "" {
+		createAclArgs = append(createAclArgs, "-i", sourceIP)
+	}
+	return deleteUserArgs, createUserArgs, createAclArgs, true
+}
+
+// m6ShadowUpdateAclCleanupArgs 从 updateAcl 原命令派生 ACL 与 seed 用户清理命令。
+func m6ShadowUpdateAclCleanupArgs(args []string) ([]string, []string, bool) {
+	if !strings.EqualFold(commandName(args), "updateAcl") {
+		return nil, nil, false
+	}
+	targetBroker := cliStringArg(args[1:], "-b", "--brokerAddr")
+	subject := cliStringArg(args[1:], "-s", "--subject")
+	resource := cliStringArg(args[1:], "-r", "--resources")
+	username, ok := m6ShadowCreateAclUsername(subject)
+	if strings.TrimSpace(targetBroker) == "" || !ok {
+		return nil, nil, false
+	}
+	deleteAclArgs := []string{"deleteAcl", "-b", targetBroker, "-s", subject}
+	if strings.TrimSpace(resource) != "" {
+		deleteAclArgs = append(deleteAclArgs, "-r", resource)
+	}
+	deleteUserArgs := []string{"deleteUser", "-b", targetBroker, "-u", username}
+	return deleteAclArgs, deleteUserArgs, true
+}
+
+// m6ShadowDeleteAclPrepareArgs 从 deleteAcl 原命令派生 seed 用户与 ACL baseline 命令。
+func m6ShadowDeleteAclPrepareArgs(args []string) ([]string, []string, []string, bool) {
+	if !strings.EqualFold(commandName(args), "deleteAcl") {
+		return nil, nil, nil, false
+	}
+	targetBroker := cliStringArg(args[1:], "-b", "--brokerAddr")
+	subject := cliStringArg(args[1:], "-s", "--subject")
+	resource := cliStringArg(args[1:], "-r", "--resources")
+	username, ok := m6ShadowCreateAclUsername(subject)
+	if strings.TrimSpace(targetBroker) == "" || strings.TrimSpace(resource) == "" || !ok {
+		return nil, nil, nil, false
+	}
+	deleteUserArgs := []string{"deleteUser", "-b", targetBroker, "-u", username}
+	createUserArgs := []string{"createUser", "-b", targetBroker, "-u", username, "-p", "m6-shadow-acl-pass", "-t", "Super"}
+	createAclArgs := []string{"createAcl", "-b", targetBroker, "-s", subject, "-r", resource, "-a", "Pub", "-d", "Allow"}
+	return deleteUserArgs, createUserArgs, createAclArgs, true
+}
+
+// m6ShadowDeleteAclCleanupArgs 从 deleteAcl 原命令派生 seed 用户清理命令。
+func m6ShadowDeleteAclCleanupArgs(args []string) ([]string, bool) {
+	if !strings.EqualFold(commandName(args), "deleteAcl") {
+		return nil, false
+	}
+	targetBroker := cliStringArg(args[1:], "-b", "--brokerAddr")
+	subject := cliStringArg(args[1:], "-s", "--subject")
+	username, ok := m6ShadowCreateAclUsername(subject)
+	if strings.TrimSpace(targetBroker) == "" || !ok {
+		return nil, false
+	}
+	deleteUserArgs := []string{"deleteUser", "-b", targetBroker, "-u", username}
+	return deleteUserArgs, true
+}
+
+// m6ShadowListAclPrepareArgs 从 listAcl 原命令派生 seed 用户与可查询 ACL baseline 命令。
+func m6ShadowListAclPrepareArgs(args []string) ([]string, []string, []string, bool) {
+	if !strings.EqualFold(commandName(args), "listAcl") {
+		return nil, nil, nil, false
+	}
+	targetBroker := cliStringArg(args[1:], "-b", "--brokerAddr")
+	subject := cliStringArg(args[1:], "-s", "--subject")
+	username, ok := m6ShadowCreateAclUsername(subject)
+	resource, resourceOK := m6ShadowListAclResource(subject)
+	if strings.TrimSpace(targetBroker) == "" || !ok || !resourceOK {
+		return nil, nil, nil, false
+	}
+	deleteUserArgs := []string{"deleteUser", "-b", targetBroker, "-u", username}
+	createUserArgs := []string{"createUser", "-b", targetBroker, "-u", username, "-p", "m6-shadow-acl-pass", "-t", "Super"}
+	createAclArgs := []string{"createAcl", "-b", targetBroker, "-s", subject, "-r", resource, "-a", "Pub", "-d", "Allow"}
+	return deleteUserArgs, createUserArgs, createAclArgs, true
+}
+
+// m6ShadowListAclCleanupArgs 从 listAcl 原命令派生 ACL 与 seed 用户清理命令。
+func m6ShadowListAclCleanupArgs(args []string) ([]string, []string, bool) {
+	if !strings.EqualFold(commandName(args), "listAcl") {
+		return nil, nil, false
+	}
+	targetBroker := cliStringArg(args[1:], "-b", "--brokerAddr")
+	subject := cliStringArg(args[1:], "-s", "--subject")
+	username, ok := m6ShadowCreateAclUsername(subject)
+	resource, resourceOK := m6ShadowListAclResource(subject)
+	if strings.TrimSpace(targetBroker) == "" || !ok || !resourceOK {
+		return nil, nil, false
+	}
+	deleteAclArgs := []string{"deleteAcl", "-b", targetBroker, "-s", subject, "-r", resource}
+	deleteUserArgs := []string{"deleteUser", "-b", targetBroker, "-u", username}
+	return deleteAclArgs, deleteUserArgs, true
+}
+
+// m6ShadowGetAclPrepareArgs 从 getAcl 原命令派生 seed 用户与可查询 ACL baseline 命令。
+func m6ShadowGetAclPrepareArgs(args []string) ([]string, []string, []string, bool) {
+	if !strings.EqualFold(commandName(args), "getAcl") {
+		return nil, nil, nil, false
+	}
+	targetBroker := cliStringArg(args[1:], "-b", "--brokerAddr")
+	subject := cliStringArg(args[1:], "-s", "--subject")
+	username, ok := m6ShadowCreateAclUsername(subject)
+	resource, resourceOK := m6ShadowListAclResource(subject)
+	if strings.TrimSpace(targetBroker) == "" || !ok || !resourceOK {
+		return nil, nil, nil, false
+	}
+	deleteUserArgs := []string{"deleteUser", "-b", targetBroker, "-u", username}
+	createUserArgs := []string{"createUser", "-b", targetBroker, "-u", username, "-p", "m6-shadow-acl-pass", "-t", "Super"}
+	createAclArgs := []string{"createAcl", "-b", targetBroker, "-s", subject, "-r", resource, "-a", "Pub", "-d", "Allow"}
+	return deleteUserArgs, createUserArgs, createAclArgs, true
+}
+
+// m6ShadowGetAclCleanupArgs 从 getAcl 原命令派生 ACL 与 seed 用户清理命令。
+func m6ShadowGetAclCleanupArgs(args []string) ([]string, []string, bool) {
+	if !strings.EqualFold(commandName(args), "getAcl") {
+		return nil, nil, false
+	}
+	targetBroker := cliStringArg(args[1:], "-b", "--brokerAddr")
+	subject := cliStringArg(args[1:], "-s", "--subject")
+	username, ok := m6ShadowCreateAclUsername(subject)
+	resource, resourceOK := m6ShadowListAclResource(subject)
+	if strings.TrimSpace(targetBroker) == "" || !ok || !resourceOK {
+		return nil, nil, false
+	}
+	deleteAclArgs := []string{"deleteAcl", "-b", targetBroker, "-s", subject, "-r", resource}
+	deleteUserArgs := []string{"deleteUser", "-b", targetBroker, "-u", username}
+	return deleteAclArgs, deleteUserArgs, true
+}
+
+// m6ShadowListAclResource 为 listAcl 样本从 seed 用户名推导确定的 Topic resource，避免给官方命令增加非官方参数。
+func m6ShadowListAclResource(subject string) (string, bool) {
+	username, ok := m6ShadowCreateAclUsername(subject)
+	if !ok {
+		return "", false
+	}
+	resourceName := strings.TrimSpace(username)
+	switch {
+	case strings.HasSuffix(resourceName, "_user"):
+		resourceName = strings.TrimSuffix(resourceName, "_user") + "_topic"
+	case strings.HasSuffix(resourceName, "-user"):
+		resourceName = strings.TrimSuffix(resourceName, "-user") + "-topic"
+	default:
+		resourceName += "-topic"
+	}
+	return "Topic:" + resourceName, true
+}
+
+// m6ShadowCreateAclUsername 只接受官方 ACL subject 的 User:<name> 形式，避免为非用户 subject 伪造 fixture。
+func m6ShadowCreateAclUsername(subject string) (string, bool) {
+	prefix, username, found := strings.Cut(strings.TrimSpace(subject), ":")
+	if !found || !strings.EqualFold(strings.TrimSpace(prefix), "User") {
+		return "", false
+	}
+	username = strings.TrimSpace(username)
+	if username == "" {
+		return "", false
+	}
+	return username, true
 }
 
 type m6ShadowTransportRunner struct {

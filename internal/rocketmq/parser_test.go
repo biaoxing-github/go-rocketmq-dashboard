@@ -252,7 +252,7 @@ func TestBuildTransactionRuntimeReportSummarizesQueuesAndOperationSamples(t *tes
 		{MessageID: "remove-msg", Topic: "RMQ_SYS_TRANS_OP_HALF_TOPIC", BrokerName: "broker-a", QueueID: 0, QueueOffset: 20, StoreTimestamp: 1783303140000, BodyPreview: "d"},
 	}
 
-	report := BuildTransactionRuntimeReport(&halfStatus, &opStatus, operations, nil)
+	report := BuildTransactionRuntimeReport(&halfStatus, &opStatus, nil, operations, BuildTransactionConsumerImpact(nil, nil), nil)
 
 	if !report.Supported || report.HalfTopic.TotalMessageCount != 4 || report.OpTopic.TotalMessageCount != 3 {
 		t.Fatalf("expected transaction topic status summary, got %#v", report)
@@ -263,6 +263,136 @@ func TestBuildTransactionRuntimeReportSummarizesQueuesAndOperationSamples(t *tes
 	if len(report.RecentOperations) != 3 || report.RecentOperations[1].Operation != "rollback" {
 		t.Fatalf("expected classified operation samples, got %#v", report.RecentOperations)
 	}
+}
+
+func TestBuildTransactionRuntimeReportAddsHealthPendingAndConsumerImpact(t *testing.T) {
+	halfStatus := TopicStatus{
+		Topic:             "RMQ_SYS_TRANS_HALF_TOPIC",
+		TotalQueues:       1,
+		TotalMessageCount: 2,
+		MinOffsetTotal:    30,
+		MaxOffsetTotal:    32,
+		Rows: []TopicStatusRow{{
+			BrokerName:   "broker-a",
+			QueueID:      0,
+			MinOffset:    30,
+			MaxOffset:    32,
+			MessageCount: 2,
+			LastUpdated:  "2026-07-06 10:00:00,000",
+		}},
+	}
+	opStatus := TopicStatus{
+		Topic:             "RMQ_SYS_TRANS_OP_HALF_TOPIC",
+		TotalQueues:       1,
+		TotalMessageCount: 1,
+		MinOffsetTotal:    40,
+		MaxOffsetTotal:    41,
+		Rows: []TopicStatusRow{{
+			BrokerName:   "broker-a",
+			QueueID:      0,
+			MinOffset:    40,
+			MaxOffset:    41,
+			MessageCount: 1,
+			LastUpdated:  "2026-07-06 10:03:00,000",
+		}},
+	}
+	halfMessages := []MessageDetail{
+		{MessageID: "new-half", Topic: "RMQ_SYS_TRANS_HALF_TOPIC", BrokerName: "broker-a", QueueID: 0, QueueOffset: 31, StoreTimestamp: 1783303380000},
+		{MessageID: "old-half", Topic: "RMQ_SYS_TRANS_HALF_TOPIC", BrokerName: "broker-a", QueueID: 0, QueueOffset: 30, StoreTimestamp: 1783303200000},
+	}
+	operations := []MessageDetail{
+		{MessageID: "rollback-msg", Topic: "RMQ_SYS_TRANS_OP_HALF_TOPIC", BrokerName: "broker-a", QueueID: 0, QueueOffset: 40, StoreTimestamp: 1783303440000, BodyPreview: "ROLLBACK_MESSAGE"},
+		{MessageID: "cleanup-msg", Topic: "RMQ_SYS_TRANS_OP_HALF_TOPIC", BrokerName: "broker-a", QueueID: 0, QueueOffset: 41, StoreTimestamp: 1783303500000, BodyPreview: "d"},
+	}
+	impact := BuildTransactionConsumerImpact([]ConsumerGroup{
+		{Name: "cg-a", Online: true, DiffTotal: 9},
+		{Name: "cg-b", Online: false, DiffTotal: 0},
+	}, []Topic{
+		{Name: "%RETRY%cg-a", Kind: "retry"},
+		{Name: "%DLQ%cg-a", Kind: "dlq"},
+	})
+
+	report := BuildTransactionRuntimeReport(&halfStatus, &opStatus, halfMessages, operations, impact, nil)
+
+	if report.HealthStatus != "risk" || !strings.Contains(report.HealthDetail, "半消息堆积 2 条") {
+		t.Fatalf("expected transaction health risk summary, got %#v", report)
+	}
+	if report.OldestPendingMessage == nil || report.OldestPendingMessage.MessageID != "old-half" {
+		t.Fatalf("expected oldest pending half message, got %#v", report.OldestPendingMessage)
+	}
+	if !strings.Contains(report.RollbackEvidenceSource, "近期事务操作消息样本") || !strings.Contains(report.RollbackEvidenceSource, "不等同于全量精确回滚数") {
+		t.Fatalf("expected rollback evidence source disclaimer, got %q", report.RollbackEvidenceSource)
+	}
+	if report.ConsumerImpact.Status != "lagging" || report.ConsumerImpact.TotalLag != 9 || report.ConsumerImpact.RetryTopicCount != 1 || report.ConsumerImpact.DLQTopicCount != 1 {
+		t.Fatalf("expected consumer impact summary, got %#v", report.ConsumerImpact)
+	}
+}
+
+func TestBuildTransactionRuntimeReportAddsSupportDiagnosticAndActionItems(t *testing.T) {
+	halfStatus := TopicStatus{
+		Topic:             "RMQ_SYS_TRANS_HALF_TOPIC",
+		TotalQueues:       1,
+		TotalMessageCount: 2,
+		Rows: []TopicStatusRow{{
+			BrokerName:   "broker-a",
+			QueueID:      0,
+			MinOffset:    10,
+			MaxOffset:    12,
+			MessageCount: 2,
+		}},
+	}
+	opStatus := TopicStatus{
+		Topic:             "RMQ_SYS_TRANS_OP_HALF_TOPIC",
+		TotalQueues:       1,
+		TotalMessageCount: 1,
+		Rows: []TopicStatusRow{{
+			BrokerName:   "broker-a",
+			QueueID:      0,
+			MinOffset:    20,
+			MaxOffset:    21,
+			MessageCount: 1,
+		}},
+	}
+	impact := BuildTransactionConsumerImpact([]ConsumerGroup{{Name: "cg-a", Online: true, DiffTotal: 7}}, nil)
+
+	report := BuildTransactionRuntimeReport(&halfStatus, &opStatus, nil, nil, impact, nil)
+
+	if report.SupportDiagnostic.Status != "supported" || len(report.SupportDiagnostic.MissingTopics) != 0 {
+		t.Fatalf("expected supported transaction diagnostic, got %#v", report.SupportDiagnostic)
+	}
+	if !strings.Contains(strings.Join(report.SupportDiagnostic.Evidence, " "), "RMQ_SYS_TRANS_HALF_TOPIC") ||
+		!strings.Contains(strings.Join(report.SupportDiagnostic.Evidence, " "), "RMQ_SYS_TRANS_OP_HALF_TOPIC") {
+		t.Fatalf("expected support evidence to name transaction topics, got %#v", report.SupportDiagnostic.Evidence)
+	}
+	if !transactionActionKeysContain(report.ActionItems, "inspect-pending-half") || !transactionActionKeysContain(report.ActionItems, "inspect-consumer-lag") {
+		t.Fatalf("expected pending and consumer action items, got %#v", report.ActionItems)
+	}
+
+	partial := BuildTransactionRuntimeReport(&halfStatus, nil, nil, nil, BuildTransactionConsumerImpact(nil, nil), nil)
+	if partial.SupportDiagnostic.Status != "partial" || !containsString(partial.SupportDiagnostic.MissingTopics, "RMQ_SYS_TRANS_OP_HALF_TOPIC") {
+		t.Fatalf("expected partial support diagnostic with missing op topic, got %#v", partial.SupportDiagnostic)
+	}
+	if !transactionActionKeysContain(partial.ActionItems, "verify-transaction-topics") {
+		t.Fatalf("expected missing topic action item, got %#v", partial.ActionItems)
+	}
+}
+
+func transactionActionKeysContain(items []TransactionActionItem, key string) bool {
+	for _, item := range items {
+		if item.Key == key {
+			return true
+		}
+	}
+	return false
+}
+
+func containsString(values []string, expected string) bool {
+	for _, value := range values {
+		if value == expected {
+			return true
+		}
+	}
+	return false
 }
 
 func commonConfigItemsForTest(panels []CommonConfigPanel) map[string]CommonConfigItem {

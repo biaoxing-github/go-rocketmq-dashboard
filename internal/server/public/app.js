@@ -705,10 +705,15 @@ function renderFeatures(payload) {
 
 function renderFeatureSummary(report) {
   const brokerConfigCount = (report.brokerConfigs || []).reduce((total, broker) => total + (broker.entries?.length || 0), 0);
+  const transactionRuntime = report.transactionRuntime || {};
   $("#featureSummary").innerHTML = `
     <div>
       <span>NameServer</span>
       <strong>${escapeHTML(report.nameServer || currentNameServer() || "-")}</strong>
+    </div>
+    <div>
+      <span>事务健康</span>
+      <strong>${escapeHTML(transactionRuntime.healthLabel || "-")}</strong>
     </div>
     <div>
       <span>Broker 配置</span>
@@ -764,24 +769,37 @@ function renderTransactionRuntime(runtime) {
   const operations = runtime.recentOperations || [];
   const warnings = runtime.warnings || [];
   const topics = [runtime.halfTopic, runtime.opTopic].filter(Boolean);
+  const oldestPending = runtime.oldestPendingMessage || null;
+  const consumerImpact = runtime.consumerImpact || {};
+  const supportDiagnostic = runtime.supportDiagnostic || {};
+  const actionItems = runtime.actionItems || [];
   $("#transactionRuntimeCount").textContent = `${operations.length} 个样本`;
-  if (!runtime.supported && !topics.some((topic) => topic?.present)) {
-    $("#transactionRuntimePanel").innerHTML = `<div class="empty-state">未采集到事务系统 Topic 运行态。</div>`;
-    return;
-  }
   const summary = [
-    ["事务支持", runtime.supported ? "已发现" : "部分"],
+    ["支持状态", supportDiagnostic.label || (runtime.supported ? "支持事务消息" : "未确认")],
+    ["事务健康", runtime.healthLabel || (runtime.supported ? "已发现" : "部分")],
+    ["最老待决", oldestPending ? formatDuration(oldestPending.pendingMillis) : "无"],
     ["半消息水位", formatCount(runtime.halfTopic?.totalMessageCount)],
     ["操作消息水位", formatCount(runtime.opTopic?.totalMessageCount)],
-    ["提交样本", formatCount(runtime.commitCount)],
+    ["消费影响", consumerImpact.label || "-"],
     ["回滚样本", formatCount(runtime.rollbackCount)],
     ["清理/未识别", `${formatCount(runtime.cleanupCount)} / ${formatCount(runtime.unknownCount)}`]
   ];
   $("#transactionRuntimePanel").innerHTML = `
+    <div class="transaction-health-strip transaction-health-${escapeAttr(runtime.healthStatus || "unknown")}">
+      <div>
+        <span class="pill ${transactionHealthClass(runtime.healthStatus)}">${escapeHTML(runtime.healthLabel || "未采集")}</span>
+        <strong>${escapeHTML(runtime.healthDetail || runtime.detail || "-")}</strong>
+      </div>
+    </div>
     <div class="transaction-summary-grid">
       ${summary.map(([label, value]) => `<div><span>${escapeHTML(label)}</span><strong>${escapeHTML(value)}</strong></div>`).join("")}
     </div>
+    ${transactionSupportDiagnosticHTML(supportDiagnostic)}
     <p class="transaction-runtime-detail">${escapeHTML(runtime.detail || "-")}</p>
+    <p class="transaction-evidence-source"><strong>证据口径</strong>${escapeHTML(runtime.rollbackEvidenceSource || "事务提交、回滚和清理数量来自近期操作消息样本。")}</p>
+    ${transactionPendingHTML(oldestPending)}
+    ${transactionConsumerImpactHTML(consumerImpact)}
+    ${transactionActionItemsHTML(actionItems)}
     ${warnings.length ? `<div class="feature-warnings transaction-warnings">${warnings.map((warning) => `<span class="pill pill-warn">${escapeHTML(warning)}</span>`).join("")}</div>` : ""}
     <div class="transaction-topic-grid">
       ${topics.map(transactionTopicHTML).join("")}
@@ -794,6 +812,134 @@ function renderTransactionRuntime(runtime) {
       ${transactionOperationTableHTML(operations)}
     </div>
   `;
+}
+
+function transactionSupportDiagnosticHTML(diagnostic) {
+  const evidence = diagnostic.evidence || [];
+  const presentTopics = diagnostic.presentTopics || [];
+  const missingTopics = diagnostic.missingTopics || [];
+  return `
+    <div class="transaction-support-diagnostic transaction-support-${escapeAttr(diagnostic.status || "unsupported")}">
+      <div class="transaction-topic-head">
+        <span>NameServer 支持诊断</span>
+        <strong>${escapeHTML(diagnostic.label || "未确认")}</strong>
+      </div>
+      <p>${escapeHTML(diagnostic.detail || "当前 NameServer 事务支持状态尚未采集。")}</p>
+      <div class="summary-grid transaction-topic-metrics">
+        <div><span>必需 Topic</span><strong>${escapeHTML(formatCount((diagnostic.requiredTopics || []).length))}</strong></div>
+        <div><span>已采集</span><strong>${escapeHTML(formatCount(presentTopics.length))}</strong></div>
+        <div><span>缺失 Topic</span><strong>${escapeHTML(formatCount(missingTopics.length))}</strong></div>
+        <div><span>下一步</span><strong>${escapeHTML(missingTopics.length ? "补证据" : "看运行态")}</strong></div>
+      </div>
+      ${presentTopics.length || missingTopics.length ? `
+        <div class="transaction-topic-tags">
+          ${presentTopics.map((topic) => `<span class="tag tag-transaction">${escapeHTML(topic)}</span>`).join("")}
+          ${missingTopics.map((topic) => `<span class="tag tag-danger">${escapeHTML(topic)}</span>`).join("")}
+        </div>
+      ` : ""}
+      ${evidence.length ? `<ul>${evidence.map((item) => `<li>${escapeHTML(item)}</li>`).join("")}</ul>` : ""}
+    </div>
+  `;
+}
+
+function transactionPendingHTML(message) {
+  if (!message) {
+    return `<div class="transaction-pending-box"><span>最老待决</span><strong>无采样半消息</strong><p>半消息水位为 0 或采样窗口内未读取到半消息详情。</p></div>`;
+  }
+  const evidence = (message.evidence || []).join("；") || `${message.brokerName || "-"} / ${message.queueId ?? "-"} / ${message.queueOffset ?? "-"}`;
+  return `
+    <div class="transaction-pending-box">
+      <span>最老待决</span>
+      <strong>${escapeHTML(formatDuration(message.pendingMillis))}</strong>
+      <p>${escapeHTML(message.messageId || "-")} · ${escapeHTML(formatTime(message.storeTimestamp))}</p>
+      <small>${escapeHTML(evidence)}</small>
+    </div>
+  `;
+}
+
+function transactionConsumerImpactHTML(impact) {
+  const relatedTopics = impact.relatedTopics || [];
+  const evidence = impact.evidence || [];
+  return `
+    <div class="transaction-consumer-impact transaction-impact-${escapeAttr(impact.status || "unknown")}">
+      <div class="transaction-topic-head">
+        <span>消费影响</span>
+        <strong>${escapeHTML(impact.label || "未采集")}</strong>
+      </div>
+      <p>${escapeHTML(impact.detail || "未采集 consumerProgress 消费组汇总。")}</p>
+      <div class="summary-grid transaction-topic-metrics">
+        <div><span>消费组</span><strong>${escapeHTML(formatCount(impact.consumerGroupCount))}</strong></div>
+        <div><span>堆积组</span><strong>${escapeHTML(formatCount(impact.laggingGroupCount))}</strong></div>
+        <div><span>总堆积</span><strong>${escapeHTML(formatCount(impact.totalLag))}</strong></div>
+        <div><span>Retry / DLQ</span><strong>${escapeHTML(`${formatCount(impact.retryTopicCount)} / ${formatCount(impact.dlqTopicCount)}`)}</strong></div>
+      </div>
+      ${relatedTopics.length ? `<div class="transaction-related-topics">${relatedTopics.map((topic) => `<span class="tag tag-${escapeAttr(topic.kind || "system")}">${escapeHTML(topic.name)}</span>`).join("")}</div>` : ""}
+      ${evidence.length ? `<ul>${evidence.map((item) => `<li>${escapeHTML(item)}</li>`).join("")}</ul>` : ""}
+    </div>
+  `;
+}
+
+function transactionActionItemsHTML(items) {
+  if (!items.length) {
+    return "";
+  }
+  return `
+    <div class="transaction-action-list">
+      <div class="transaction-topic-head">
+        <span>处理清单</span>
+        <strong>${escapeHTML(items.length)} 项</strong>
+      </div>
+      <div class="transaction-action-grid">
+        ${items.map((item) => `
+          <article class="transaction-action-item transaction-action-${escapeAttr(item.priority || "low")}">
+            <div class="transaction-action-head">
+              <span class="pill ${transactionActionPriorityClass(item.priority)}">${escapeHTML(transactionActionPriorityText(item.priority))}</span>
+              <strong>${escapeHTML(item.title || item.key || "下一步")}</strong>
+            </div>
+            <p>${escapeHTML(item.detail || "-")}</p>
+            ${(item.evidence || []).length ? `<ul>${(item.evidence || []).map((evidence) => `<li>${escapeHTML(evidence)}</li>`).join("")}</ul>` : ""}
+          </article>
+        `).join("")}
+      </div>
+    </div>
+  `;
+}
+
+function transactionHealthClass(status) {
+  switch (status) {
+    case "healthy":
+      return "pill-ok";
+    case "risk":
+      return "pill-danger";
+    case "partial":
+      return "pill-warn";
+    case "observed":
+      return "pill-info";
+    default:
+      return "pill-muted";
+  }
+}
+
+function transactionActionPriorityClass(priority) {
+  switch (priority) {
+    case "high":
+      return "pill-danger";
+    case "medium":
+      return "pill-warn";
+    default:
+      return "pill-muted";
+  }
+}
+
+function transactionActionPriorityText(priority) {
+  switch (priority) {
+    case "high":
+      return "高优先级";
+    case "medium":
+      return "中优先级";
+    default:
+      return "低优先级";
+  }
 }
 
 function transactionTopicHTML(topic) {
@@ -3140,6 +3286,29 @@ function formatTime(value) {
     return "-";
   }
   return new Date(value).toLocaleString("zh-CN", { hour12: false });
+}
+
+// formatDuration 将待决毫秒数压缩成适合面板扫描的中文时长。
+function formatDuration(value) {
+  const millis = Number(value || 0);
+  if (!Number.isFinite(millis) || millis <= 0) {
+    return "0 秒";
+  }
+  const totalSeconds = Math.floor(millis / 1000);
+  const days = Math.floor(totalSeconds / 86400);
+  const hours = Math.floor((totalSeconds % 86400) / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (days > 0) {
+    return `${days} 天 ${hours} 小时`;
+  }
+  if (hours > 0) {
+    return `${hours} 小时 ${minutes} 分`;
+  }
+  if (minutes > 0) {
+    return `${minutes} 分 ${seconds} 秒`;
+  }
+  return `${seconds} 秒`;
 }
 
 // formatCount 把队列水位、样本数等整数统一格式化，避免大数在面板里难以扫描。

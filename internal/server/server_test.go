@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"regexp"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -60,6 +61,56 @@ func TestPublicAppDefinesCalledFormatHelpers(t *testing.T) {
 			continue
 		}
 		t.Fatalf("public/app.js calls undefined format helper %q", name)
+	}
+}
+
+func TestPublicAppRendersTransactionP0HealthFields(t *testing.T) {
+	script, err := os.ReadFile("public/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(script)
+	for _, expected := range []string{
+		"healthStatus",
+		"healthDetail",
+		"oldestPendingMessage",
+		"consumerImpact",
+		"rollbackEvidenceSource",
+		"事务健康",
+		"最老待决",
+		"消费影响",
+		"证据口径",
+		"无采样半消息",
+		"未采集 consumerProgress",
+	} {
+		if !strings.Contains(source, expected) {
+			t.Fatalf("public/app.js should render transaction P0 field %q", expected)
+		}
+	}
+	if strings.Contains(source, "未采集到事务系统 Topic 运行态。</div>") {
+		t.Fatalf("public/app.js should keep transaction P0 conclusion visible instead of returning an empty state")
+	}
+}
+
+func TestPublicAppRendersTransactionP1DiagnosticFields(t *testing.T) {
+	script, err := os.ReadFile("public/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(script)
+	for _, expected := range []string{
+		"supportDiagnostic",
+		"actionItems",
+		"transactionSupportDiagnosticHTML",
+		"transactionActionItemsHTML",
+		"NameServer 支持诊断",
+		"处理清单",
+		"缺失 Topic",
+		"下一步",
+	} {
+		if !strings.Contains(source, expected) {
+			t.Fatalf("public/app.js should render transaction P1 field %q", expected)
+		}
 	}
 }
 

@@ -1243,7 +1243,17 @@ td {
   background: color-mix(in oklch, var(--warn) 12%, white);
 }
 
+.tag-transaction {
+  color: var(--accent-strong);
+  background: var(--accent-soft);
+}
+
 .tag-dlq {
+  color: var(--danger);
+  background: color-mix(in oklch, var(--danger) 11%, white);
+}
+
+.tag-danger {
   color: var(--danger);
   background: color-mix(in oklch, var(--danger) 11%, white);
 }
@@ -1673,21 +1683,34 @@ td {
   margin: 2px 0 18px;
 }
 
+.feature-warnings .pill {
+  min-width: 0;
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
 .transaction-runtime-panel,
 .common-config-panels {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 12px;
   min-width: 0;
 }
 
 .transaction-summary-grid {
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
   gap: 10px;
 }
 
 .transaction-summary-grid div,
-.transaction-topic-metrics div {
+.transaction-topic-metrics div,
+.transaction-pending-box,
+.transaction-consumer-impact,
+.transaction-support-diagnostic,
+.transaction-action-list,
+.transaction-health-strip {
   min-width: 0;
   padding: 12px;
   border: 1px solid var(--border);
@@ -1717,6 +1740,133 @@ td {
   color: var(--muted);
   font-size: 13px;
   line-height: 1.6;
+}
+
+.transaction-health-strip {
+  border-color: var(--border-strong);
+  background: var(--surface-soft);
+}
+
+.transaction-health-strip div {
+  display: grid;
+  gap: 8px;
+}
+
+.transaction-health-strip strong {
+  font-size: 14px;
+  line-height: 1.55;
+  word-break: break-word;
+}
+
+.transaction-evidence-source {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: baseline;
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.transaction-evidence-source strong {
+  color: var(--text);
+}
+
+.transaction-pending-box,
+.transaction-consumer-impact,
+.transaction-support-diagnostic,
+.transaction-action-list,
+.transaction-action-item {
+  display: grid;
+  gap: 8px;
+}
+
+.transaction-pending-box span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.transaction-pending-box strong {
+  font-size: 18px;
+}
+
+.transaction-pending-box p,
+.transaction-consumer-impact p,
+.transaction-support-diagnostic p,
+.transaction-action-item p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
+  word-break: break-word;
+}
+
+.transaction-pending-box small {
+  color: var(--faint);
+  font-size: 11px;
+  line-height: 1.5;
+  word-break: break-word;
+}
+
+.transaction-consumer-impact ul,
+.transaction-support-diagnostic ul,
+.transaction-action-item ul {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding-left: 16px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.transaction-related-topics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.transaction-topic-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.transaction-topic-tags .tag {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.transaction-action-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+  min-width: 0;
+}
+
+.transaction-action-item {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-soft);
+}
+
+.transaction-action-head {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.transaction-action-head strong {
+  min-width: 0;
+  font-size: 13px;
+  line-height: 1.35;
+  word-break: break-word;
 }
 
 .transaction-warnings {

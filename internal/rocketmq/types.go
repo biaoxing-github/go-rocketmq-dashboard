@@ -97,10 +97,20 @@ type TransactionRuntimeReport struct {
 	Supported bool `json:"supported"`
 	// Detail 是给页面展示的事务运行态说明。
 	Detail string `json:"detail"`
+	// HealthStatus 是事务运行态健康结论：healthy、observed、risk、partial 或 unknown。
+	HealthStatus string `json:"healthStatus"`
+	// HealthLabel 是健康结论的中文短标签。
+	HealthLabel string `json:"healthLabel"`
+	// HealthDetail 解释健康结论的触发原因，帮助运维直接判断是否需要处理。
+	HealthDetail string `json:"healthDetail"`
+	// SupportDiagnostic 说明当前 NameServer 对事务消息运行态的支持证据和缺口。
+	SupportDiagnostic TransactionSupportDiagnostic `json:"supportDiagnostic"`
 	// HalfTopic 是 RMQ_SYS_TRANS_HALF_TOPIC 的队列水位摘要。
 	HalfTopic TransactionTopicRuntime `json:"halfTopic"`
 	// OpTopic 是 RMQ_SYS_TRANS_OP_HALF_TOPIC 的队列水位摘要。
 	OpTopic TransactionTopicRuntime `json:"opTopic"`
+	// OldestPendingMessage 是采样窗口内最早写入的事务半消息，用于估算待决时间。
+	OldestPendingMessage *TransactionPendingMessage `json:"oldestPendingMessage,omitempty"`
 	// CommitCount 是近期操作样本里能明确识别为提交的数量。
 	CommitCount int `json:"commitCount"`
 	// RollbackCount 是近期操作样本里能明确识别为回滚的数量。
@@ -109,9 +119,97 @@ type TransactionRuntimeReport struct {
 	CleanupCount int `json:"cleanupCount"`
 	// UnknownCount 是近期操作样本里无法识别操作语义的数量。
 	UnknownCount int `json:"unknownCount"`
+	// RollbackEvidenceSource 说明提交/回滚/清理计数的证据口径，避免把样本数误读成全量统计。
+	RollbackEvidenceSource string `json:"rollbackEvidenceSource"`
+	// ConsumerImpact 汇总全局消费组堆积和 Retry/DLQ Topic，可辅助判断提交后业务消费是否受影响。
+	ConsumerImpact TransactionConsumerImpact `json:"consumerImpact"`
+	// ActionItems 是按当前事务状态生成的下一步处理清单。
+	ActionItems []TransactionActionItem `json:"actionItems"`
 	// RecentOperations 是从操作消息 Topic 最近位点回查到的样本。
 	RecentOperations []TransactionOperationSample `json:"recentOperations"`
 	// Warnings 记录事务运行态采集或语义识别的非致命问题。
+	Warnings []string `json:"warnings"`
+}
+
+// TransactionSupportDiagnostic 表示当前 NameServer 是否具备事务消息运行态证据。
+type TransactionSupportDiagnostic struct {
+	// Status 是支持状态：supported、partial 或 unsupported。
+	Status string `json:"status"`
+	// Label 是支持状态的中文短标签。
+	Label string `json:"label"`
+	// Detail 解释支持状态的判断依据。
+	Detail string `json:"detail"`
+	// RequiredTopics 是判断事务运行态需要的系统 Topic。
+	RequiredTopics []string `json:"requiredTopics"`
+	// PresentTopics 是当前已采集到运行态的事务系统 Topic。
+	PresentTopics []string `json:"presentTopics"`
+	// MissingTopics 是当前缺失的事务系统 Topic。
+	MissingTopics []string `json:"missingTopics"`
+	// Evidence 是可展示的支持状态证据。
+	Evidence []string `json:"evidence"`
+}
+
+// TransactionActionItem 表示事务面板给运维的下一步处理建议。
+type TransactionActionItem struct {
+	// Key 是行动项的稳定标识。
+	Key string `json:"key"`
+	// Priority 是行动优先级：high、medium 或 low。
+	Priority string `json:"priority"`
+	// Title 是行动项标题。
+	Title string `json:"title"`
+	// Detail 是行动项说明。
+	Detail string `json:"detail"`
+	// Evidence 是触发该行动项的页面证据。
+	Evidence []string `json:"evidence"`
+}
+
+// TransactionPendingMessage 表示一个采样到的待决事务半消息。
+type TransactionPendingMessage struct {
+	// MessageID 是半消息的 OffsetID 或消息 ID。
+	MessageID string `json:"messageId"`
+	// BrokerName 是半消息所在 Broker。
+	BrokerName string `json:"brokerName"`
+	// QueueID 是半消息所在队列 ID。
+	QueueID int `json:"queueId"`
+	// QueueOffset 是半消息所在队列位点。
+	QueueOffset int64 `json:"queueOffset"`
+	// StoreTimestamp 是半消息进入 Broker 的时间戳。
+	StoreTimestamp int64 `json:"storeTimestamp"`
+	// PendingMillis 是基于当前采集时间估算的待决毫秒数。
+	PendingMillis int64 `json:"pendingMillis"`
+	// Evidence 是页面展示的采样依据。
+	Evidence []string `json:"evidence"`
+}
+
+// TransactionConsumerImpact 表示事务提交后可能关联到的业务消费影响面。
+type TransactionConsumerImpact struct {
+	// Status 是消费影响结论：healthy、lagging、warning 或 unknown。
+	Status string `json:"status"`
+	// Label 是消费影响结论的中文短标签。
+	Label string `json:"label"`
+	// Detail 解释消费影响的判断来源和边界。
+	Detail string `json:"detail"`
+	// ConsumerGroupCount 是 consumerProgress 汇总到的消费组数量。
+	ConsumerGroupCount int `json:"consumerGroupCount"`
+	// OnlineGroupCount 是当前在线消费组数量。
+	OnlineGroupCount int `json:"onlineGroupCount"`
+	// LaggingGroupCount 是 DiffTotal 大于 0 的消费组数量。
+	LaggingGroupCount int `json:"laggingGroupCount"`
+	// TotalLag 是 consumerProgress 汇总堆积量。
+	TotalLag int64 `json:"totalLag"`
+	// MaxLagGroup 是堆积最大的消费组名称。
+	MaxLagGroup string `json:"maxLagGroup"`
+	// MaxLag 是最大单组堆积量。
+	MaxLag int64 `json:"maxLag"`
+	// RetryTopicCount 是当前 NameServer 可见的 Retry Topic 数量。
+	RetryTopicCount int `json:"retryTopicCount"`
+	// DLQTopicCount 是当前 NameServer 可见的 DLQ Topic 数量。
+	DLQTopicCount int `json:"dlqTopicCount"`
+	// RelatedTopics 是与消费异常相关的 Retry/DLQ Topic 摘要。
+	RelatedTopics []FeatureTopic `json:"relatedTopics"`
+	// Evidence 记录 consumerProgress 与 TopicList 的采集证据。
+	Evidence []string `json:"evidence"`
+	// Warnings 记录消费影响采集过程中的非致命问题。
 	Warnings []string `json:"warnings"`
 }
 

@@ -112,7 +112,7 @@ func BuildClusterFeatureReport(nameServer string, clusters []Cluster, topics []T
 	report.SystemTopicCount = countPresentFeatureTopics(report.SystemTopics)
 	report.Capabilities = buildFeatureCapabilities(report.SystemTopics, brokerConfigs)
 	report.CommonConfigPanels = buildCommonConfigPanels(brokerConfigs)
-	report.TransactionRuntime = BuildTransactionRuntimeReport(nil, nil, nil, nil)
+	report.TransactionRuntime = BuildTransactionRuntimeReport(nil, nil, nil, nil, BuildTransactionConsumerImpact(nil, topics), nil)
 	return report
 }
 
@@ -207,11 +207,19 @@ func buildFeatureCapabilities(topics []FeatureTopic, brokerConfigs []BrokerConfi
 	}
 }
 
-// BuildTransactionRuntimeReport 汇总事务半消息 Topic、操作消息 Topic 和近期操作样本。
-func BuildTransactionRuntimeReport(halfStatus *TopicStatus, opStatus *TopicStatus, operations []MessageDetail, warnings []string) TransactionRuntimeReport {
+// BuildTransactionRuntimeReport 汇总事务半消息 Topic、操作消息 Topic、待决样本、操作样本和消费影响面。
+func BuildTransactionRuntimeReport(halfStatus *TopicStatus, opStatus *TopicStatus, halfMessages []MessageDetail, operations []MessageDetail, consumerImpact TransactionConsumerImpact, warnings []string) TransactionRuntimeReport {
 	report := TransactionRuntimeReport{
-		Detail:   "未采集到事务系统 Topic 运行态",
-		Warnings: uniqueStrings(warnings),
+		Detail:                 "未采集到事务系统 Topic 运行态",
+		HealthStatus:           "unknown",
+		HealthLabel:            "未采集",
+		HealthDetail:           "未采集到事务系统 Topic 运行态，无法判断事务健康。",
+		RollbackEvidenceSource: "提交、回滚和清理数量来自近期事务操作消息样本，只能表示当前采样窗口，不等同于全量精确回滚数。",
+		ConsumerImpact:         consumerImpact,
+		Warnings:               uniqueStrings(warnings),
+	}
+	if report.ConsumerImpact.Status == "" {
+		report.ConsumerImpact = BuildTransactionConsumerImpact(nil, nil)
 	}
 	report.HalfTopic = transactionTopicRuntime("RMQ_SYS_TRANS_HALF_TOPIC", "事务半消息", halfStatus)
 	report.OpTopic = transactionTopicRuntime("RMQ_SYS_TRANS_OP_HALF_TOPIC", "事务操作消息", opStatus)
@@ -238,7 +246,253 @@ func BuildTransactionRuntimeReport(halfStatus *TopicStatus, opStatus *TopicStatu
 	if report.OpTopic.Present && (report.CleanupCount > 0 || report.UnknownCount > 0) {
 		report.Warnings = uniqueStrings(append(report.Warnings, "事务操作 Topic 的清理标记可能同时来自提交和回滚，未识别样本不作为精确回滚数量。"))
 	}
+	report.OldestPendingMessage = oldestTransactionPendingMessage(halfMessages, time.Now())
+	report.SupportDiagnostic = buildTransactionSupportDiagnostic(report)
+	applyTransactionHealth(&report)
+	report.ActionItems = buildTransactionActionItems(report)
 	return report
+}
+
+// BuildTransactionConsumerImpact 汇总全局消费组堆积和 Retry/DLQ Topic，辅助判断事务提交后的消费影响面。
+func BuildTransactionConsumerImpact(groups []ConsumerGroup, topics []Topic) TransactionConsumerImpact {
+	impact := TransactionConsumerImpact{
+		Status:   "unknown",
+		Label:    "未采集",
+		Detail:   "未采集 consumerProgress 消费组汇总，无法判断提交后的业务消费影响。",
+		Evidence: make([]string, 0),
+	}
+	for _, group := range groups {
+		impact.ConsumerGroupCount++
+		if group.Online {
+			impact.OnlineGroupCount++
+		}
+		if group.DiffTotal > 0 {
+			impact.LaggingGroupCount++
+			impact.TotalLag += group.DiffTotal
+			if group.DiffTotal > impact.MaxLag {
+				impact.MaxLag = group.DiffTotal
+				impact.MaxLagGroup = group.Name
+			}
+		}
+	}
+	for _, topic := range topics {
+		related, ok := transactionImpactTopic(topic)
+		if !ok {
+			continue
+		}
+		if related.Kind == "retry" {
+			impact.RetryTopicCount++
+		}
+		if related.Kind == "dlq" {
+			impact.DLQTopicCount++
+		}
+		if len(impact.RelatedTopics) < 8 {
+			impact.RelatedTopics = append(impact.RelatedTopics, related)
+		}
+	}
+	if impact.ConsumerGroupCount > 0 {
+		impact.Evidence = append(impact.Evidence, fmt.Sprintf("consumerProgress 汇总消费组 %d 个，在线 %d 个，堆积组 %d 个。", impact.ConsumerGroupCount, impact.OnlineGroupCount, impact.LaggingGroupCount))
+	}
+	impact.Evidence = append(impact.Evidence, fmt.Sprintf("TopicList 发现 Retry Topic %d 个，DLQ Topic %d 个。", impact.RetryTopicCount, impact.DLQTopicCount))
+	impact.Evidence = append(impact.Evidence, "事务消息提交后进入业务 Topic；这里展示全局消费影响面，不等同于事务专属消费量。")
+	switch {
+	case impact.TotalLag > 0:
+		impact.Status = "lagging"
+		impact.Label = "有堆积"
+		impact.Detail = fmt.Sprintf("consumerProgress 显示 %d 个消费组存在堆积，最大堆积组 %s 为 %d 条。", impact.LaggingGroupCount, firstNonEmpty(impact.MaxLagGroup, "-"), impact.MaxLag)
+	case impact.DLQTopicCount > 0:
+		impact.Status = "warning"
+		impact.Label = "有死信 Topic"
+		impact.Detail = "未发现消费组堆积，但 NameServer 可见 DLQ Topic，需要结合业务消费组继续排查死信。"
+	case impact.ConsumerGroupCount > 0:
+		impact.Status = "healthy"
+		impact.Label = "无全局堆积"
+		impact.Detail = "consumerProgress 未发现消费组堆积；事务提交后的业务消费需结合具体 Topic 和 Group 继续确认。"
+	}
+	impact.Evidence = uniqueStrings(impact.Evidence)
+	return impact
+}
+
+func transactionImpactTopic(topic Topic) (FeatureTopic, bool) {
+	kind := topic.Kind
+	if kind == "" {
+		kind = classifyTopic(topic.Name)
+	}
+	switch kind {
+	case "retry":
+		return FeatureTopic{Name: topic.Name, Label: "Retry Topic", Kind: "retry", Present: true, Detail: "消费失败后等待重试的 Topic"}, true
+	case "dlq":
+		return FeatureTopic{Name: topic.Name, Label: "DLQ Topic", Kind: "dlq", Present: true, Detail: "超过重试次数后进入死信的 Topic"}, true
+	default:
+		return FeatureTopic{}, false
+	}
+}
+
+func oldestTransactionPendingMessage(messages []MessageDetail, now time.Time) *TransactionPendingMessage {
+	var oldest *MessageDetail
+	for index := range messages {
+		message := messages[index]
+		if message.StoreTimestamp <= 0 {
+			continue
+		}
+		if oldest == nil || message.StoreTimestamp < oldest.StoreTimestamp {
+			oldest = &message
+		}
+	}
+	if oldest == nil {
+		return nil
+	}
+	pendingMillis := now.UnixMilli() - oldest.StoreTimestamp
+	if pendingMillis < 0 {
+		pendingMillis = 0
+	}
+	return &TransactionPendingMessage{
+		MessageID:      oldest.MessageID,
+		BrokerName:     oldest.BrokerName,
+		QueueID:        oldest.QueueID,
+		QueueOffset:    oldest.QueueOffset,
+		StoreTimestamp: oldest.StoreTimestamp,
+		PendingMillis:  pendingMillis,
+		Evidence:       []string{fmt.Sprintf("%s/%d/%d 半消息采样 StoreTimestamp", firstNonEmpty(oldest.BrokerName, "-"), oldest.QueueID, oldest.QueueOffset)},
+	}
+}
+
+func buildTransactionSupportDiagnostic(report TransactionRuntimeReport) TransactionSupportDiagnostic {
+	diagnostic := TransactionSupportDiagnostic{
+		Status:         "unsupported",
+		Label:          "未发现事务 Topic",
+		Detail:         "当前 NameServer 未采集到事务半消息和事务操作消息 Topic，无法确认事务消息运行态。",
+		RequiredTopics: []string{"RMQ_SYS_TRANS_HALF_TOPIC", "RMQ_SYS_TRANS_OP_HALF_TOPIC"},
+		PresentTopics:  make([]string, 0, 2),
+		MissingTopics:  make([]string, 0, 2),
+		Evidence:       make([]string, 0, 4),
+	}
+	if report.HalfTopic.Present {
+		diagnostic.PresentTopics = append(diagnostic.PresentTopics, "RMQ_SYS_TRANS_HALF_TOPIC")
+		diagnostic.Evidence = append(diagnostic.Evidence, "NameServer 可见 RMQ_SYS_TRANS_HALF_TOPIC，且 topicStatus 已采集队列水位。")
+	} else {
+		diagnostic.MissingTopics = append(diagnostic.MissingTopics, "RMQ_SYS_TRANS_HALF_TOPIC")
+		diagnostic.Evidence = append(diagnostic.Evidence, "未采集到 RMQ_SYS_TRANS_HALF_TOPIC 的队列水位。")
+	}
+	if report.OpTopic.Present {
+		diagnostic.PresentTopics = append(diagnostic.PresentTopics, "RMQ_SYS_TRANS_OP_HALF_TOPIC")
+		diagnostic.Evidence = append(diagnostic.Evidence, "NameServer 可见 RMQ_SYS_TRANS_OP_HALF_TOPIC，且 topicStatus 已采集队列水位。")
+	} else {
+		diagnostic.MissingTopics = append(diagnostic.MissingTopics, "RMQ_SYS_TRANS_OP_HALF_TOPIC")
+		diagnostic.Evidence = append(diagnostic.Evidence, "未采集到 RMQ_SYS_TRANS_OP_HALF_TOPIC 的队列水位。")
+	}
+	switch len(diagnostic.MissingTopics) {
+	case 0:
+		diagnostic.Status = "supported"
+		diagnostic.Label = "支持事务消息"
+		diagnostic.Detail = "当前 NameServer 已暴露事务半消息和事务操作消息 Topic，可展示事务运行态。"
+	case 1:
+		diagnostic.Status = "partial"
+		diagnostic.Label = "事务证据不完整"
+		diagnostic.Detail = fmt.Sprintf("当前 NameServer 只采集到部分事务系统 Topic，缺少 %s。", diagnostic.MissingTopics[0])
+	default:
+		diagnostic.Status = "unsupported"
+		diagnostic.Label = "未发现事务 Topic"
+		diagnostic.Detail = "当前 NameServer 未暴露事务半消息和事务操作消息 Topic，页面只能给出不支持或未采集结论。"
+	}
+	diagnostic.Evidence = uniqueStrings(diagnostic.Evidence)
+	return diagnostic
+}
+
+func buildTransactionActionItems(report TransactionRuntimeReport) []TransactionActionItem {
+	items := make([]TransactionActionItem, 0)
+	if report.SupportDiagnostic.Status != "supported" {
+		items = append(items, TransactionActionItem{
+			Key:      "verify-transaction-topics",
+			Priority: "high",
+			Title:    "先确认事务系统 Topic",
+			Detail:   "事务运行态依赖半消息 Topic 和操作消息 Topic；缺失任一 Topic 时，先核对业务是否使用事务消息以及当前 NameServer 是否连到正确集群。",
+			Evidence: append([]string(nil), report.SupportDiagnostic.Evidence...),
+		})
+		return items
+	}
+	if report.HalfTopic.TotalMessageCount > 0 {
+		evidence := []string{fmt.Sprintf("半消息水位 %d 条", report.HalfTopic.TotalMessageCount)}
+		if report.OldestPendingMessage != nil {
+			evidence = append(evidence, fmt.Sprintf("最老待决位点 %s/%d/%d", firstNonEmpty(report.OldestPendingMessage.BrokerName, "-"), report.OldestPendingMessage.QueueID, report.OldestPendingMessage.QueueOffset))
+		}
+		items = append(items, TransactionActionItem{
+			Key:      "inspect-pending-half",
+			Priority: "high",
+			Title:    "排查待决事务半消息",
+			Detail:   "半消息堆积表示事务尚未提交或回滚；优先按最老位点回查业务 key、生产者事务检查日志和 Broker 事务回查配置。",
+			Evidence: evidence,
+		})
+	}
+	if report.RollbackCount > 0 || report.CleanupCount > 0 || report.UnknownCount > 0 {
+		items = append(items, TransactionActionItem{
+			Key:      "review-operation-samples",
+			Priority: "medium",
+			Title:    "复核近期事务操作样本",
+			Detail:   "提交、回滚和清理数量来自采样窗口；结合操作消息样本与业务日志确认是否存在集中回滚或无法识别的清理标记。",
+			Evidence: []string{
+				fmt.Sprintf("提交/回滚/清理/未识别 = %d/%d/%d/%d", report.CommitCount, report.RollbackCount, report.CleanupCount, report.UnknownCount),
+				report.RollbackEvidenceSource,
+			},
+		})
+	}
+	if report.ConsumerImpact.Status == "lagging" {
+		items = append(items, TransactionActionItem{
+			Key:      "inspect-consumer-lag",
+			Priority: "high",
+			Title:    "检查提交后的消费堆积",
+			Detail:   "事务提交后的消息会进入业务 Topic；当前全局消费组存在堆积，应按最大堆积组继续查看消费连接、订阅和客户端日志。",
+			Evidence: []string{
+				fmt.Sprintf("最大堆积组 %s 为 %d 条", firstNonEmpty(report.ConsumerImpact.MaxLagGroup, "-"), report.ConsumerImpact.MaxLag),
+				fmt.Sprintf("总堆积 %d 条", report.ConsumerImpact.TotalLag),
+			},
+		})
+	} else if report.ConsumerImpact.Status == "warning" {
+		items = append(items, TransactionActionItem{
+			Key:      "inspect-dlq-topics",
+			Priority: "medium",
+			Title:    "检查死信 Topic",
+			Detail:   "未发现全局消费堆积但存在 DLQ Topic，需按业务消费组确认是否有事务提交后的消息进入死信。",
+			Evidence: []string{fmt.Sprintf("DLQ Topic %d 个", report.ConsumerImpact.DLQTopicCount)},
+		})
+	}
+	if len(items) == 0 {
+		items = append(items, TransactionActionItem{
+			Key:      "keep-observing",
+			Priority: "low",
+			Title:    "保持观察",
+			Detail:   "当前事务 Topic 完整且未发现待决半消息或全局消费堆积；保留样本和配置证据，后续按采集时间继续观察。",
+			Evidence: []string{report.HealthDetail},
+		})
+	}
+	return items
+}
+
+func applyTransactionHealth(report *TransactionRuntimeReport) {
+	switch {
+	case report.Supported && report.HalfTopic.TotalMessageCount > 0:
+		report.HealthStatus = "risk"
+		report.HealthLabel = "半消息待决"
+		report.HealthDetail = fmt.Sprintf("半消息堆积 %d 条，说明存在尚未提交或回滚的事务。", report.HalfTopic.TotalMessageCount)
+		if report.OldestPendingMessage != nil {
+			report.HealthDetail += fmt.Sprintf(" 采样内最老半消息位点 %s/%d/%d。", firstNonEmpty(report.OldestPendingMessage.BrokerName, "-"), report.OldestPendingMessage.QueueID, report.OldestPendingMessage.QueueOffset)
+		}
+	case report.Supported:
+		report.HealthStatus = "healthy"
+		report.HealthLabel = "无待决半消息"
+		report.HealthDetail = "事务半消息水位为 0，当前未发现待决事务。"
+	case report.HalfTopic.Present || report.OpTopic.Present:
+		report.HealthStatus = "partial"
+		report.HealthLabel = "证据不完整"
+		report.HealthDetail = "只采集到部分事务系统 Topic，无法完整判断事务健康。"
+	default:
+		report.HealthStatus = "unknown"
+		report.HealthLabel = "未采集"
+		report.HealthDetail = "未采集到事务系统 Topic 运行态，无法判断事务健康。"
+	}
+	if report.ConsumerImpact.Status == "lagging" {
+		report.HealthDetail += " 消费影响面存在全局堆积，需结合业务 Topic 和 Group 继续确认提交后消费情况。"
+	}
 }
 
 func transactionTopicRuntime(topic string, label string, status *TopicStatus) TransactionTopicRuntime {

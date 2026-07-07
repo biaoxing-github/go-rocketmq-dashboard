@@ -149,7 +149,7 @@ func TestRunM6ShadowPlanAppliesFixtureJSONWithoutInvokingRunners(t *testing.T) {
 	if err := json.Unmarshal(bytes.TrimSpace(stdout.Bytes()), &decoded); err != nil {
 		t.Fatalf("expected valid JSON object, got %v", err)
 	}
-	if decoded.Total != 78 || decoded.Executable != 1 || decoded.Skipped != 77 {
+	if decoded.Total != 87 || decoded.Executable != 1 || decoded.Skipped != 86 {
 		t.Fatalf("unexpected plan counts: %#v", decoded)
 	}
 	if len(decoded.ExecutableSamples) != 1 || decoded.ExecutableSamples[0].Name != "known-message" {
@@ -183,7 +183,7 @@ func TestRunM6ShadowPlanReadsFixtureJSONFileAfterPlanFlag(t *testing.T) {
 	if err := json.Unmarshal(bytes.TrimSpace(stdout.Bytes()), &decoded); err != nil {
 		t.Fatalf("expected valid JSON object, got %v", err)
 	}
-	if decoded.Total != 78 || decoded.Executable != 1 || decoded.Skipped != 77 {
+	if decoded.Total != 87 || decoded.Executable != 1 || decoded.Skipped != 86 {
 		t.Fatalf("expected fixture file to make one sample executable, got %#v", decoded)
 	}
 }
@@ -228,7 +228,7 @@ func TestRunM6ShadowRunExecutesConcreteFixturesAndPrintsSummary(t *testing.T) {
 	if err := json.Unmarshal([]byte(lines[1]), &summary); err != nil {
 		t.Fatalf("expected second line to be summary JSON, got %v", err)
 	}
-	if summary.Executed != 1 || summary.Skipped != 77 || summary.Summary.Mismatches != 0 {
+	if summary.Executed != 1 || summary.Skipped != 86 || summary.Summary.Mismatches != 0 {
 		t.Fatalf("unexpected summary: %#v", summary)
 	}
 	expectedCall := []string{"queryMsgById", "-n", "127.0.0.1:9876", "-i", "AC18000300002A9F0000000000000000"}
@@ -284,7 +284,7 @@ func TestRunM6ShadowRunExecutesMessageChainFixture(t *testing.T) {
 	if err := json.Unmarshal([]byte(lines[1]), &summary); err != nil {
 		t.Fatalf("expected summary JSON, got %v", err)
 	}
-	if summary.Executed != 1 || summary.Skipped != 77 || summary.Summary.Mismatches != 0 {
+	if summary.Executed != 1 || summary.Skipped != 86 || summary.Summary.Mismatches != 0 {
 		t.Fatalf("unexpected messageChain summary: %#v", summary)
 	}
 	if runner.countCommand("messageChain") != 0 {
@@ -361,7 +361,7 @@ func TestRunM6ShadowRunExecutesMessageChainMessageIDTraceFixture(t *testing.T) {
 	if err := json.Unmarshal([]byte(lines[1]), &summary); err != nil {
 		t.Fatalf("expected summary JSON, got %v", err)
 	}
-	if summary.Executed != 1 || summary.Skipped != 77 || summary.Summary.Mismatches != 0 {
+	if summary.Executed != 1 || summary.Skipped != 86 || summary.Summary.Mismatches != 0 {
 		t.Fatalf("unexpected messageChain summary: %#v", summary)
 	}
 	if runner.countCommand("queryMsgById") != 4 || runner.countCommand("queryMsgTraceById") != 4 {
@@ -423,7 +423,7 @@ func TestRunM6ShadowRunPassesConcurrencyToBatchExecution(t *testing.T) {
 	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &summary); err != nil {
 		t.Fatalf("expected summary JSON line, got %v", err)
 	}
-	if summary.Executed != 3 || summary.Skipped != 77 || summary.Summary.Mismatches != 0 {
+	if summary.Executed != 3 || summary.Skipped != 86 || summary.Summary.Mismatches != 0 {
 		t.Fatalf("unexpected summary after concurrent run: %#v", summary)
 	}
 }
@@ -465,7 +465,7 @@ func TestRunM6ShadowRunRestoresWritePermBeforeEachWipeWritePermProvider(t *testi
 	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &summary); err != nil {
 		t.Fatalf("expected summary JSON line, got %v", err)
 	}
-	if summary.Executed != 1 || summary.Skipped != 77 || summary.Summary.Mismatches != 0 {
+	if summary.Executed != 1 || summary.Skipped != 86 || summary.Summary.Mismatches != 0 {
 		t.Fatalf("unexpected wipeWritePerm summary: %#v", summary)
 	}
 }
@@ -507,7 +507,7 @@ func TestRunM6ShadowRunPreparesAndRestoresWritePermAroundEachAddWritePermProvide
 	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &summary); err != nil {
 		t.Fatalf("expected summary JSON line, got %v", err)
 	}
-	if summary.Executed != 1 || summary.Skipped != 77 || summary.Summary.Mismatches != 0 {
+	if summary.Executed != 1 || summary.Skipped != 86 || summary.Summary.Mismatches != 0 {
 		t.Fatalf("unexpected addWritePerm summary: %#v", summary)
 	}
 }
@@ -566,7 +566,7 @@ func TestRunM6ShadowRunPreparesAndCleansDeleteKvConfigAroundEachProvider(t *test
 	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &summary); err != nil {
 		t.Fatalf("expected summary JSON line, got %v", err)
 	}
-	if summary.Executed != 1 || summary.Skipped != 77 || summary.Summary.Mismatches != 0 {
+	if summary.Executed != 1 || summary.Skipped != 86 || summary.Summary.Mismatches != 0 {
 		t.Fatalf("unexpected deleteKvConfig summary: %#v", summary)
 	}
 }
@@ -628,7 +628,7 @@ func TestRunM6ShadowRunResetsUpdateUserTargetAroundEachProvider(t *testing.T) {
 	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &summary); err != nil {
 		t.Fatalf("expected summary JSON line, got %v", err)
 	}
-	if summary.Executed != 1 || summary.Skipped != 77 || summary.Summary.Mismatches != 0 {
+	if summary.Executed != 1 || summary.Skipped != 86 || summary.Summary.Mismatches != 0 {
 		t.Fatalf("unexpected updateUser summary: %#v", summary)
 	}
 }
@@ -687,7 +687,7 @@ func TestRunM6ShadowRunResetsUpdateNamesrvConfigAroundEachProvider(t *testing.T)
 	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &summary); err != nil {
 		t.Fatalf("expected summary JSON line, got %v", err)
 	}
-	if summary.Executed != 1 || summary.Skipped != 77 || summary.Summary.Mismatches != 0 {
+	if summary.Executed != 1 || summary.Skipped != 86 || summary.Summary.Mismatches != 0 {
 		t.Fatalf("unexpected updateNamesrvConfig summary: %#v", summary)
 	}
 }
@@ -749,8 +749,380 @@ func TestRunM6ShadowRunResetsUpdateBrokerConfigAroundEachProvider(t *testing.T) 
 	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &summary); err != nil {
 		t.Fatalf("expected summary JSON line, got %v", err)
 	}
-	if summary.Executed != 1 || summary.Skipped != 77 || summary.Summary.Mismatches != 0 {
+	if summary.Executed != 1 || summary.Skipped != 86 || summary.Summary.Mismatches != 0 {
 		t.Fatalf("unexpected updateBrokerConfig summary: %#v", summary)
+	}
+}
+
+func TestRunM6ShadowRunCleansUpdateColdDataFlowCtrGroupConfigAroundEachProvider(t *testing.T) {
+	fixtures := `{"samples":[{"name":"update-cold-data-flow-ctr-group-config","args":["updateColdDataFlowCtrGroupConfig","-b","127.0.0.1:10911","-g","M673ColdGroup","-v","123"]}]}`
+	runner := &mappedRecordingRunner{
+		outputsByCommand: map[string]string{
+			"updateColdDataFlowCtrGroupConfig": "updateColdDataFlowCtrGroupConfig success, 127.0.0.1:10911\n",
+			"removeColdDataFlowCtrGroupConfig": "remove broker cold read threshold success, 127.0.0.1:10911\n",
+		},
+	}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	code := Run(context.Background(), Options{
+		NameServer: "127.0.0.1:9876",
+		Transport:  "process",
+		Runner:     runner,
+		Stdout:     &stdout,
+		Stderr:     &stderr,
+	}, []string{"--m6-shadow-run", "--m6-shadow-fixtures", fixtures})
+
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d stderr=%q stdout=%q", code, stderr.String(), stdout.String())
+	}
+	commands := runner.commandNames()
+	expected := []string{
+		"removeColdDataFlowCtrGroupConfig", "updateColdDataFlowCtrGroupConfig", "removeColdDataFlowCtrGroupConfig",
+		"removeColdDataFlowCtrGroupConfig", "updateColdDataFlowCtrGroupConfig", "removeColdDataFlowCtrGroupConfig",
+		"removeColdDataFlowCtrGroupConfig", "updateColdDataFlowCtrGroupConfig", "removeColdDataFlowCtrGroupConfig",
+		"removeColdDataFlowCtrGroupConfig", "updateColdDataFlowCtrGroupConfig", "removeColdDataFlowCtrGroupConfig",
+	}
+	if !reflect.DeepEqual(commands, expected) {
+		t.Fatalf("expected cold data flow threshold cleanup around every provider\nexpected=%#v\nactual=%#v\ncalls=%#v", expected, commands, runner.commands())
+	}
+	for index, call := range runner.commands() {
+		if broker := stringArgForCLITest(t, call, "-b"); broker != "127.0.0.1:10911" {
+			t.Fatalf("expected broker addr to be copied, got %q in %#v", broker, call)
+		}
+		if group := stringArgForCLITest(t, call, "-g"); group != "M673ColdGroup" {
+			t.Fatalf("expected consumer group to be copied, got %q in %#v", group, call)
+		}
+		if index%3 == 1 {
+			if call[0] != "updateColdDataFlowCtrGroupConfig" {
+				t.Fatalf("expected provider command to be updateColdDataFlowCtrGroupConfig, got %#v", call)
+			}
+			if threshold := stringArgForCLITest(t, call, "-v"); threshold != "123" {
+				t.Fatalf("expected target threshold to be preserved, got %q in %#v", threshold, call)
+			}
+			continue
+		}
+		if call[0] != "removeColdDataFlowCtrGroupConfig" {
+			t.Fatalf("expected cleanup command to be removeColdDataFlowCtrGroupConfig, got %#v", call)
+		}
+	}
+	lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
+	var summary nativeadmin.ShadowBatchSummaryReport
+	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &summary); err != nil {
+		t.Fatalf("expected summary JSON line, got %v", err)
+	}
+	if summary.Executed != 1 || summary.Skipped != 86 || summary.Summary.Mismatches != 0 {
+		t.Fatalf("unexpected updateColdDataFlowCtrGroupConfig summary: %#v", summary)
+	}
+}
+
+func TestRunM6ShadowRunSeedsRemoveColdDataFlowCtrGroupConfigAroundEachProvider(t *testing.T) {
+	fixtures := `{"samples":[{"name":"remove-cold-data-flow-ctr-group-config","args":["removeColdDataFlowCtrGroupConfig","-b","127.0.0.1:10911","-g","M674ColdGroup"]}]}`
+	runner := &mappedRecordingRunner{
+		outputsByCommand: map[string]string{
+			"updateColdDataFlowCtrGroupConfig": "updateColdDataFlowCtrGroupConfig success, 127.0.0.1:10911\n",
+			"removeColdDataFlowCtrGroupConfig": "remove broker cold read threshold success, 127.0.0.1:10911\n",
+		},
+	}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	code := Run(context.Background(), Options{
+		NameServer: "127.0.0.1:9876",
+		Transport:  "process",
+		Runner:     runner,
+		Stdout:     &stdout,
+		Stderr:     &stderr,
+	}, []string{"--m6-shadow-run", "--m6-shadow-fixtures", fixtures})
+
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d stderr=%q stdout=%q", code, stderr.String(), stdout.String())
+	}
+	commands := runner.commandNames()
+	expected := []string{
+		"updateColdDataFlowCtrGroupConfig", "removeColdDataFlowCtrGroupConfig", "removeColdDataFlowCtrGroupConfig",
+		"updateColdDataFlowCtrGroupConfig", "removeColdDataFlowCtrGroupConfig", "removeColdDataFlowCtrGroupConfig",
+		"updateColdDataFlowCtrGroupConfig", "removeColdDataFlowCtrGroupConfig", "removeColdDataFlowCtrGroupConfig",
+		"updateColdDataFlowCtrGroupConfig", "removeColdDataFlowCtrGroupConfig", "removeColdDataFlowCtrGroupConfig",
+	}
+	if !reflect.DeepEqual(commands, expected) {
+		t.Fatalf("expected cold data flow threshold seed and cleanup around every provider\nexpected=%#v\nactual=%#v\ncalls=%#v", expected, commands, runner.commands())
+	}
+	for index, call := range runner.commands() {
+		if broker := stringArgForCLITest(t, call, "-b"); broker != "127.0.0.1:10911" {
+			t.Fatalf("expected broker addr to be copied, got %q in %#v", broker, call)
+		}
+		if group := stringArgForCLITest(t, call, "-g"); group != "M674ColdGroup" {
+			t.Fatalf("expected consumer group to be copied, got %q in %#v", group, call)
+		}
+		if index%3 == 0 {
+			if call[0] != "updateColdDataFlowCtrGroupConfig" {
+				t.Fatalf("expected seed command to be updateColdDataFlowCtrGroupConfig, got %#v", call)
+			}
+			if threshold := stringArgForCLITest(t, call, "-v"); threshold != "m6-shadow-cold-flow-threshold" {
+				t.Fatalf("expected seed threshold, got %q in %#v", threshold, call)
+			}
+			continue
+		}
+		if call[0] != "removeColdDataFlowCtrGroupConfig" {
+			t.Fatalf("expected provider or cleanup command to be removeColdDataFlowCtrGroupConfig, got %#v", call)
+		}
+	}
+	lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
+	var summary nativeadmin.ShadowBatchSummaryReport
+	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &summary); err != nil {
+		t.Fatalf("expected summary JSON line, got %v", err)
+	}
+	if summary.Executed != 1 || summary.Skipped != 86 || summary.Summary.Mismatches != 0 {
+		t.Fatalf("unexpected removeColdDataFlowCtrGroupConfig summary: %#v", summary)
+	}
+}
+
+func TestRunM6ShadowRunCleansUpdateTopicAroundEachProvider(t *testing.T) {
+	fixtures := `{"samples":[{"name":"update-topic","args":["updateTopic","-n","127.0.0.1:9876","-c","DefaultCluster","-t","M676UpdateTopic"]}]}`
+	runner := &mappedRecordingRunner{
+		outputsByCommand: map[string]string{
+			"updateTopic": "create topic to 127.0.0.1:10911 success.\nTopicConfig [topicName=M676UpdateTopic, readQueueNums=8, writeQueueNums=8, perm=RW-, topicFilterType=SINGLE_TAG, topicSysFlag=0, order=false, attributes={}]\n",
+			"deleteTopic": "delete topic [M676UpdateTopic] from cluster [DefaultCluster] success.\ndelete topic [M676UpdateTopic] from NameServer success.\n",
+		},
+	}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	code := Run(context.Background(), Options{
+		NameServer: "127.0.0.1:9876",
+		Transport:  "process",
+		Runner:     runner,
+		Stdout:     &stdout,
+		Stderr:     &stderr,
+	}, []string{"--m6-shadow-run", "--m6-shadow-fixtures", fixtures})
+
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d stderr=%q stdout=%q", code, stderr.String(), stdout.String())
+	}
+	commands := runner.commandNames()
+	expected := []string{
+		"deleteTopic", "updateTopic", "deleteTopic",
+		"deleteTopic", "updateTopic", "deleteTopic",
+		"deleteTopic", "updateTopic", "deleteTopic",
+		"deleteTopic", "updateTopic", "deleteTopic",
+	}
+	if !reflect.DeepEqual(commands, expected) {
+		t.Fatalf("expected updateTopic cleanup around every provider\nexpected=%#v\nactual=%#v\ncalls=%#v", expected, commands, runner.commands())
+	}
+	for index, call := range runner.commands() {
+		if nameServer := stringArgForCLITest(t, call, "-n"); nameServer != "127.0.0.1:9876" {
+			t.Fatalf("expected namesrv to be copied, got %q in %#v", nameServer, call)
+		}
+		if cluster := stringArgForCLITest(t, call, "-c"); cluster != "DefaultCluster" {
+			t.Fatalf("expected cluster to be copied, got %q in %#v", cluster, call)
+		}
+		if topic := stringArgForCLITest(t, call, "-t"); topic != "M676UpdateTopic" {
+			t.Fatalf("expected topic to be copied, got %q in %#v", topic, call)
+		}
+		if index%3 == 1 {
+			if call[0] != "updateTopic" {
+				t.Fatalf("expected provider command to be updateTopic, got %#v", call)
+			}
+			continue
+		}
+		if call[0] != "deleteTopic" {
+			t.Fatalf("expected cleanup command to be deleteTopic, got %#v", call)
+		}
+	}
+	lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
+	var summary nativeadmin.ShadowBatchSummaryReport
+	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &summary); err != nil {
+		t.Fatalf("expected summary JSON line, got %v", err)
+	}
+	if summary.Executed != 1 || summary.Skipped != 86 || summary.Summary.Mismatches != 0 {
+		t.Fatalf("unexpected updateTopic summary: %#v", summary)
+	}
+}
+
+func TestRunM6ShadowRunCleansUpdateSubGroupAroundEachProvider(t *testing.T) {
+	fixtures := `{"samples":[{"name":"update-sub-group","args":["updateSubGroup","-n","127.0.0.1:9876","-c","DefaultCluster","-g","M677UpdateSubGroup"]}]}`
+	runner := &mappedRecordingRunner{
+		outputsByCommand: map[string]string{
+			"updateSubGroup": "create subscription group to 127.0.0.1:10911 success.\nSubscriptionGroupConfig{groupName=M677UpdateSubGroup, consumeEnable=true, consumeFromMinEnable=false, consumeBroadcastEnable=false, consumeMessageOrderly=false, retryQueueNums=1, retryMaxTimes=16, groupRetryPolicy=GroupRetryPolicy{type=CUSTOMIZED, exponentialRetryPolicy=null, customizedRetryPolicy=null}, brokerId=0, whichBrokerWhenConsumeSlowly=1, notifyConsumerIdsChangedEnable=true, groupSysFlag=0, consumeTimeoutMinute=15, subscriptionDataSet=null, attributes={}}\n",
+			"deleteSubGroup": "delete subscription group [M677UpdateSubGroup] from broker [127.0.0.1:10911] in cluster [DefaultCluster] success.\n",
+		},
+	}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	code := Run(context.Background(), Options{
+		NameServer: "127.0.0.1:9876",
+		Transport:  "process",
+		Runner:     runner,
+		Stdout:     &stdout,
+		Stderr:     &stderr,
+	}, []string{"--m6-shadow-run", "--m6-shadow-fixtures", fixtures})
+
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d stderr=%q stdout=%q", code, stderr.String(), stdout.String())
+	}
+	commands := runner.commandNames()
+	expected := []string{
+		"deleteSubGroup", "updateSubGroup", "deleteSubGroup",
+		"deleteSubGroup", "updateSubGroup", "deleteSubGroup",
+		"deleteSubGroup", "updateSubGroup", "deleteSubGroup",
+		"deleteSubGroup", "updateSubGroup", "deleteSubGroup",
+	}
+	if !reflect.DeepEqual(commands, expected) {
+		t.Fatalf("expected updateSubGroup cleanup around every provider\nexpected=%#v\nactual=%#v\ncalls=%#v", expected, commands, runner.commands())
+	}
+	for index, call := range runner.commands() {
+		if nameServer := stringArgForCLITest(t, call, "-n"); nameServer != "127.0.0.1:9876" {
+			t.Fatalf("expected namesrv to be copied, got %q in %#v", nameServer, call)
+		}
+		if cluster := stringArgForCLITest(t, call, "-c"); cluster != "DefaultCluster" {
+			t.Fatalf("expected cluster to be copied, got %q in %#v", cluster, call)
+		}
+		if group := stringArgForCLITest(t, call, "-g"); group != "M677UpdateSubGroup" {
+			t.Fatalf("expected group to be copied, got %q in %#v", group, call)
+		}
+		if index%3 == 1 {
+			if call[0] != "updateSubGroup" {
+				t.Fatalf("expected provider command to be updateSubGroup, got %#v", call)
+			}
+			continue
+		}
+		if call[0] != "deleteSubGroup" {
+			t.Fatalf("expected cleanup command to be deleteSubGroup, got %#v", call)
+		}
+	}
+	lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
+	var summary nativeadmin.ShadowBatchSummaryReport
+	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &summary); err != nil {
+		t.Fatalf("expected summary JSON line, got %v", err)
+	}
+	if summary.Executed != 1 || summary.Skipped != 86 || summary.Summary.Mismatches != 0 {
+		t.Fatalf("unexpected updateSubGroup summary: %#v", summary)
+	}
+}
+
+func TestRunM6ShadowRunSeedsDeleteSubGroupAroundEachProvider(t *testing.T) {
+	fixtures := `{"samples":[{"name":"delete-sub-group","args":["deleteSubGroup","-n","127.0.0.1:9876","-c","DefaultCluster","-g","M678DeleteSubGroup"]}]}`
+	runner := &mappedRecordingRunner{
+		outputsByCommand: map[string]string{
+			"updateSubGroup": "create subscription group to 127.0.0.1:10911 success.\nSubscriptionGroupConfig{groupName=M678DeleteSubGroup, consumeEnable=true, consumeFromMinEnable=false, consumeBroadcastEnable=false, consumeMessageOrderly=false, retryQueueNums=1, retryMaxTimes=16, groupRetryPolicy=GroupRetryPolicy{type=CUSTOMIZED, exponentialRetryPolicy=null, customizedRetryPolicy=null}, brokerId=0, whichBrokerWhenConsumeSlowly=1, notifyConsumerIdsChangedEnable=true, groupSysFlag=0, consumeTimeoutMinute=15, subscriptionDataSet=null, attributes={}}\n",
+			"deleteSubGroup": "delete subscription group [M678DeleteSubGroup] from broker [127.0.0.1:10911] in cluster [DefaultCluster] success.\n",
+		},
+	}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	code := Run(context.Background(), Options{
+		NameServer: "127.0.0.1:9876",
+		Transport:  "process",
+		Runner:     runner,
+		Stdout:     &stdout,
+		Stderr:     &stderr,
+	}, []string{"--m6-shadow-run", "--m6-shadow-fixtures", fixtures})
+
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d stderr=%q stdout=%q", code, stderr.String(), stdout.String())
+	}
+	commands := runner.commandNames()
+	expected := []string{
+		"updateSubGroup", "deleteSubGroup", "deleteSubGroup",
+		"updateSubGroup", "deleteSubGroup", "deleteSubGroup",
+		"updateSubGroup", "deleteSubGroup", "deleteSubGroup",
+		"updateSubGroup", "deleteSubGroup", "deleteSubGroup",
+	}
+	if !reflect.DeepEqual(commands, expected) {
+		t.Fatalf("expected deleteSubGroup setup and cleanup around every provider\nexpected=%#v\nactual=%#v\ncalls=%#v", expected, commands, runner.commands())
+	}
+	for index, call := range runner.commands() {
+		if nameServer := stringArgForCLITest(t, call, "-n"); nameServer != "127.0.0.1:9876" {
+			t.Fatalf("expected namesrv to be copied, got %q in %#v", nameServer, call)
+		}
+		if cluster := stringArgForCLITest(t, call, "-c"); cluster != "DefaultCluster" {
+			t.Fatalf("expected cluster to be copied, got %q in %#v", cluster, call)
+		}
+		if group := stringArgForCLITest(t, call, "-g"); group != "M678DeleteSubGroup" {
+			t.Fatalf("expected group to be copied, got %q in %#v", group, call)
+		}
+		if index%3 == 0 {
+			if call[0] != "updateSubGroup" {
+				t.Fatalf("expected setup command to be updateSubGroup, got %#v", call)
+			}
+			continue
+		}
+		if call[0] != "deleteSubGroup" {
+			t.Fatalf("expected target or cleanup command to be deleteSubGroup, got %#v", call)
+		}
+	}
+	lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
+	var summary nativeadmin.ShadowBatchSummaryReport
+	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &summary); err != nil {
+		t.Fatalf("expected summary JSON line, got %v", err)
+	}
+	if summary.Executed != 1 || summary.Skipped != 86 || summary.Summary.Mismatches != 0 {
+		t.Fatalf("unexpected deleteSubGroup summary: %#v", summary)
+	}
+}
+
+func TestRunM6ShadowRunSeedsDeleteTopicAroundEachProvider(t *testing.T) {
+	fixtures := `{"samples":[{"name":"delete-topic","args":["deleteTopic","-n","127.0.0.1:9876","-c","DefaultCluster","-t","M675DeleteTopic"]}]}`
+	runner := &mappedRecordingRunner{
+		outputsByCommand: map[string]string{
+			"updateTopic": "create topic to 127.0.0.1:10911 success.\nTopicConfig [topicName=M675DeleteTopic, readQueueNums=8, writeQueueNums=8, perm=RW-, topicFilterType=SINGLE_TAG, topicSysFlag=0, order=false, attributes={}]\n",
+			"deleteTopic": "delete topic [M675DeleteTopic] from cluster [DefaultCluster] success.\ndelete topic [M675DeleteTopic] from NameServer success.\n",
+		},
+	}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	code := Run(context.Background(), Options{
+		NameServer: "127.0.0.1:9876",
+		Transport:  "process",
+		Runner:     runner,
+		Stdout:     &stdout,
+		Stderr:     &stderr,
+	}, []string{"--m6-shadow-run", "--m6-shadow-fixtures", fixtures})
+
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d stderr=%q stdout=%q", code, stderr.String(), stdout.String())
+	}
+	commands := runner.commandNames()
+	expected := []string{
+		"updateTopic", "deleteTopic", "deleteTopic",
+		"updateTopic", "deleteTopic", "deleteTopic",
+		"updateTopic", "deleteTopic", "deleteTopic",
+		"updateTopic", "deleteTopic", "deleteTopic",
+	}
+	if !reflect.DeepEqual(commands, expected) {
+		t.Fatalf("expected deleteTopic topic seed and cleanup around every provider\nexpected=%#v\nactual=%#v\ncalls=%#v", expected, commands, runner.commands())
+	}
+	for index, call := range runner.commands() {
+		if nameServer := stringArgForCLITest(t, call, "-n"); nameServer != "127.0.0.1:9876" {
+			t.Fatalf("expected namesrv to be copied, got %q in %#v", nameServer, call)
+		}
+		if cluster := stringArgForCLITest(t, call, "-c"); cluster != "DefaultCluster" {
+			t.Fatalf("expected cluster to be copied, got %q in %#v", cluster, call)
+		}
+		if topic := stringArgForCLITest(t, call, "-t"); topic != "M675DeleteTopic" {
+			t.Fatalf("expected topic to be copied, got %q in %#v", topic, call)
+		}
+		if index%3 == 0 {
+			if call[0] != "updateTopic" {
+				t.Fatalf("expected seed command to be updateTopic, got %#v", call)
+			}
+			continue
+		}
+		if call[0] != "deleteTopic" {
+			t.Fatalf("expected provider or cleanup command to be deleteTopic, got %#v", call)
+		}
+	}
+	lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
+	var summary nativeadmin.ShadowBatchSummaryReport
+	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &summary); err != nil {
+		t.Fatalf("expected summary JSON line, got %v", err)
+	}
+	if summary.Executed != 1 || summary.Skipped != 86 || summary.Summary.Mismatches != 0 {
+		t.Fatalf("unexpected deleteTopic summary: %#v", summary)
 	}
 }
 
@@ -814,8 +1186,481 @@ func TestRunM6ShadowRunDeletesCreateUserTargetAroundEachProvider(t *testing.T) {
 	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &summary); err != nil {
 		t.Fatalf("expected summary JSON line, got %v", err)
 	}
-	if summary.Executed != 1 || summary.Skipped != 77 || summary.Summary.Mismatches != 0 {
+	if summary.Executed != 1 || summary.Skipped != 86 || summary.Summary.Mismatches != 0 {
 		t.Fatalf("unexpected createUser summary: %#v", summary)
+	}
+}
+
+func TestRunM6ShadowRunSeedsAndDeletesCreateAclTargetAroundEachProvider(t *testing.T) {
+	fixtures := `{"samples":[{"name":"create-acl","args":["createAcl","-b","127.0.0.1:31182","-s","User:goadmin-m6-create-acl","-r","Topic:GoadminM679CreateAclTopic","-a","Pub","-d","Allow","-i","10.67.9.1"]}]}`
+	runner := &mappedRecordingRunner{
+		outputsByCommand: map[string]string{
+			"deleteUser": "delete user to 127.0.0.1:31182 success.\n",
+			"createUser": "create user to 127.0.0.1:31182 success.\n",
+			"createAcl":  "create acl to 127.0.0.1:31182 success.\n",
+			"deleteAcl":  "delete acl to 127.0.0.1:31182 success.\n",
+		},
+	}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	code := Run(context.Background(), Options{
+		NameServer: "127.0.0.1:9876",
+		Transport:  "process",
+		Runner:     runner,
+		Stdout:     &stdout,
+		Stderr:     &stderr,
+	}, []string{"--m6-shadow-run", "--m6-shadow-fixtures", fixtures})
+
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d stderr=%q stdout=%q", code, stderr.String(), stdout.String())
+	}
+	commands := runner.commandNames()
+	expected := []string{
+		"deleteUser", "createUser", "createAcl", "deleteAcl", "deleteUser",
+		"deleteUser", "createUser", "createAcl", "deleteAcl", "deleteUser",
+		"deleteUser", "createUser", "createAcl", "deleteAcl", "deleteUser",
+		"deleteUser", "createUser", "createAcl", "deleteAcl", "deleteUser",
+	}
+	if !reflect.DeepEqual(commands, expected) {
+		t.Fatalf("expected createAcl user seed and acl cleanup around every provider\nexpected=%#v\nactual=%#v\ncalls=%#v", expected, commands, runner.commands())
+	}
+	for _, call := range runner.commands() {
+		switch call[0] {
+		case "deleteUser":
+			if broker := stringArgForCLITest(t, call, "-b"); broker != "127.0.0.1:31182" {
+				t.Fatalf("expected target broker to be copied, got %q in %#v", broker, call)
+			}
+			if username := stringArgForCLITest(t, call, "-u"); username != "goadmin-m6-create-acl" {
+				t.Fatalf("expected username to be copied from subject, got %q in %#v", username, call)
+			}
+		case "createUser":
+			if broker := stringArgForCLITest(t, call, "-b"); broker != "127.0.0.1:31182" {
+				t.Fatalf("expected target broker to be copied, got %q in %#v", broker, call)
+			}
+			if username := stringArgForCLITest(t, call, "-u"); username != "goadmin-m6-create-acl" {
+				t.Fatalf("expected username to be copied from subject, got %q in %#v", username, call)
+			}
+			if password := stringArgForCLITest(t, call, "-p"); password != "m6-shadow-acl-pass" {
+				t.Fatalf("expected deterministic seed password, got %q in %#v", password, call)
+			}
+			if userType := stringArgForCLITest(t, call, "-t"); userType != "Super" {
+				t.Fatalf("expected super user type for ACL seed user, got %q in %#v", userType, call)
+			}
+		case "createAcl":
+			if broker := stringArgForCLITest(t, call, "-b"); broker != "127.0.0.1:31182" {
+				t.Fatalf("expected target broker to be preserved, got %q in %#v", broker, call)
+			}
+			if subject := stringArgForCLITest(t, call, "-s"); subject != "User:goadmin-m6-create-acl" {
+				t.Fatalf("expected subject to be preserved, got %q in %#v", subject, call)
+			}
+			if sourceIP := stringArgForCLITest(t, call, "-i"); sourceIP != "10.67.9.1" {
+				t.Fatalf("expected source IP to be preserved, got %q in %#v", sourceIP, call)
+			}
+		case "deleteAcl":
+			if broker := stringArgForCLITest(t, call, "-b"); broker != "127.0.0.1:31182" {
+				t.Fatalf("expected target broker to be copied, got %q in %#v", broker, call)
+			}
+			if subject := stringArgForCLITest(t, call, "-s"); subject != "User:goadmin-m6-create-acl" {
+				t.Fatalf("expected subject to be copied, got %q in %#v", subject, call)
+			}
+			if resource := stringArgForCLITest(t, call, "-r"); resource != "Topic:GoadminM679CreateAclTopic" {
+				t.Fatalf("expected resource to be copied, got %q in %#v", resource, call)
+			}
+		default:
+			t.Fatalf("unexpected command in createAcl hook run: %#v", call)
+		}
+	}
+	lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
+	var summary nativeadmin.ShadowBatchSummaryReport
+	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &summary); err != nil {
+		t.Fatalf("expected summary JSON line, got %v", err)
+	}
+	if summary.Executed != 1 || summary.Skipped != 86 || summary.Summary.Mismatches != 0 {
+		t.Fatalf("unexpected createAcl summary: %#v", summary)
+	}
+}
+
+func TestRunM6ShadowRunSeedsUpdatesAndDeletesUpdateAclTargetAroundEachProvider(t *testing.T) {
+	fixtures := `{"samples":[{"name":"update-acl","args":["updateAcl","-b","127.0.0.1:31183","-s","User:goadmin-m6-update-acl","-r","Topic:GoadminM680UpdateAclTopic","-a","Sub","-d","Deny","-i","10.68.0.1"]}]}`
+	runner := &mappedRecordingRunner{
+		outputsByCommand: map[string]string{
+			"deleteUser": "delete user to 127.0.0.1:31183 success.\n",
+			"createUser": "create user to 127.0.0.1:31183 success.\n",
+			"createAcl":  "create acl to 127.0.0.1:31183 success.\n",
+			"updateAcl":  "update acl to 127.0.0.1:31183 success.\n",
+			"deleteAcl":  "delete acl to 127.0.0.1:31183 success.\n",
+		},
+	}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	code := Run(context.Background(), Options{
+		NameServer: "127.0.0.1:9876",
+		Transport:  "process",
+		Runner:     runner,
+		Stdout:     &stdout,
+		Stderr:     &stderr,
+	}, []string{"--m6-shadow-run", "--m6-shadow-fixtures", fixtures})
+
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d stderr=%q stdout=%q", code, stderr.String(), stdout.String())
+	}
+	commands := runner.commandNames()
+	expected := []string{
+		"deleteUser", "createUser", "createAcl", "updateAcl", "deleteAcl", "deleteUser",
+		"deleteUser", "createUser", "createAcl", "updateAcl", "deleteAcl", "deleteUser",
+		"deleteUser", "createUser", "createAcl", "updateAcl", "deleteAcl", "deleteUser",
+		"deleteUser", "createUser", "createAcl", "updateAcl", "deleteAcl", "deleteUser",
+	}
+	if !reflect.DeepEqual(commands, expected) {
+		t.Fatalf("expected updateAcl user and baseline seed plus cleanup around every provider\nexpected=%#v\nactual=%#v\ncalls=%#v", expected, commands, runner.commands())
+	}
+	for _, call := range runner.commands() {
+		switch call[0] {
+		case "deleteUser":
+			if broker := stringArgForCLITest(t, call, "-b"); broker != "127.0.0.1:31183" {
+				t.Fatalf("expected target broker to be copied, got %q in %#v", broker, call)
+			}
+			if username := stringArgForCLITest(t, call, "-u"); username != "goadmin-m6-update-acl" {
+				t.Fatalf("expected username to be copied from subject, got %q in %#v", username, call)
+			}
+		case "createUser":
+			if broker := stringArgForCLITest(t, call, "-b"); broker != "127.0.0.1:31183" {
+				t.Fatalf("expected target broker to be copied, got %q in %#v", broker, call)
+			}
+			if username := stringArgForCLITest(t, call, "-u"); username != "goadmin-m6-update-acl" {
+				t.Fatalf("expected username to be copied from subject, got %q in %#v", username, call)
+			}
+			if password := stringArgForCLITest(t, call, "-p"); password != "m6-shadow-acl-pass" {
+				t.Fatalf("expected deterministic seed password, got %q in %#v", password, call)
+			}
+			if userType := stringArgForCLITest(t, call, "-t"); userType != "Super" {
+				t.Fatalf("expected super user type for ACL seed user, got %q in %#v", userType, call)
+			}
+		case "createAcl":
+			if action := stringArgForCLITest(t, call, "-a"); action != "Pub" {
+				t.Fatalf("expected updateAcl baseline action Pub, got %q in %#v", action, call)
+			}
+			if decision := stringArgForCLITest(t, call, "-d"); decision != "Allow" {
+				t.Fatalf("expected updateAcl baseline decision Allow, got %q in %#v", decision, call)
+			}
+		case "updateAcl":
+			if action := stringArgForCLITest(t, call, "-a"); action != "Sub" {
+				t.Fatalf("expected fixture action Sub, got %q in %#v", action, call)
+			}
+			if decision := stringArgForCLITest(t, call, "-d"); decision != "Deny" {
+				t.Fatalf("expected fixture decision Deny, got %q in %#v", decision, call)
+			}
+		case "deleteAcl":
+			if broker := stringArgForCLITest(t, call, "-b"); broker != "127.0.0.1:31183" {
+				t.Fatalf("expected target broker to be copied, got %q in %#v", broker, call)
+			}
+			if subject := stringArgForCLITest(t, call, "-s"); subject != "User:goadmin-m6-update-acl" {
+				t.Fatalf("expected subject to be copied, got %q in %#v", subject, call)
+			}
+			if resource := stringArgForCLITest(t, call, "-r"); resource != "Topic:GoadminM680UpdateAclTopic" {
+				t.Fatalf("expected resource to be copied, got %q in %#v", resource, call)
+			}
+		default:
+			t.Fatalf("unexpected command in updateAcl hook run: %#v", call)
+		}
+	}
+	lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
+	var summary nativeadmin.ShadowBatchSummaryReport
+	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &summary); err != nil {
+		t.Fatalf("expected summary JSON line, got %v", err)
+	}
+	if summary.Executed != 1 || summary.Skipped != 86 || summary.Summary.Mismatches != 0 {
+		t.Fatalf("unexpected updateAcl summary: %#v", summary)
+	}
+}
+
+func TestRunM6ShadowRunSeedsAndDeletesDeleteAclTargetAroundEachProvider(t *testing.T) {
+	fixtures := `{"samples":[{"name":"delete-acl","args":["deleteAcl","-b","127.0.0.1:31184","-s","User:goadmin-m6-delete-acl","-r","Topic:GoadminM681DeleteAclTopic"]}]}`
+	runner := &mappedRecordingRunner{
+		outputsByCommand: map[string]string{
+			"deleteUser": "delete user to 127.0.0.1:31184 success.\n",
+			"createUser": "create user to 127.0.0.1:31184 success.\n",
+			"createAcl":  "create acl to 127.0.0.1:31184 success.\n",
+			"deleteAcl":  "delete acl to 127.0.0.1:31184 success.\n",
+		},
+	}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	code := Run(context.Background(), Options{
+		NameServer: "127.0.0.1:9876",
+		Transport:  "process",
+		Runner:     runner,
+		Stdout:     &stdout,
+		Stderr:     &stderr,
+	}, []string{"--m6-shadow-run", "--m6-shadow-fixtures", fixtures})
+
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d stderr=%q stdout=%q", code, stderr.String(), stdout.String())
+	}
+	commands := runner.commandNames()
+	expected := []string{
+		"deleteUser", "createUser", "createAcl", "deleteAcl", "deleteUser",
+		"deleteUser", "createUser", "createAcl", "deleteAcl", "deleteUser",
+		"deleteUser", "createUser", "createAcl", "deleteAcl", "deleteUser",
+		"deleteUser", "createUser", "createAcl", "deleteAcl", "deleteUser",
+	}
+	if !reflect.DeepEqual(commands, expected) {
+		t.Fatalf("expected deleteAcl user and baseline seed plus user cleanup around every provider\nexpected=%#v\nactual=%#v\ncalls=%#v", expected, commands, runner.commands())
+	}
+	for _, call := range runner.commands() {
+		switch call[0] {
+		case "deleteUser":
+			if broker := stringArgForCLITest(t, call, "-b"); broker != "127.0.0.1:31184" {
+				t.Fatalf("expected target broker to be copied, got %q in %#v", broker, call)
+			}
+			if username := stringArgForCLITest(t, call, "-u"); username != "goadmin-m6-delete-acl" {
+				t.Fatalf("expected username to be copied from subject, got %q in %#v", username, call)
+			}
+		case "createUser":
+			if broker := stringArgForCLITest(t, call, "-b"); broker != "127.0.0.1:31184" {
+				t.Fatalf("expected target broker to be copied, got %q in %#v", broker, call)
+			}
+			if username := stringArgForCLITest(t, call, "-u"); username != "goadmin-m6-delete-acl" {
+				t.Fatalf("expected username to be copied from subject, got %q in %#v", username, call)
+			}
+			if password := stringArgForCLITest(t, call, "-p"); password != "m6-shadow-acl-pass" {
+				t.Fatalf("expected deterministic seed password, got %q in %#v", password, call)
+			}
+			if userType := stringArgForCLITest(t, call, "-t"); userType != "Super" {
+				t.Fatalf("expected super user type for ACL seed user, got %q in %#v", userType, call)
+			}
+		case "createAcl":
+			if broker := stringArgForCLITest(t, call, "-b"); broker != "127.0.0.1:31184" {
+				t.Fatalf("expected target broker to be copied, got %q in %#v", broker, call)
+			}
+			if subject := stringArgForCLITest(t, call, "-s"); subject != "User:goadmin-m6-delete-acl" {
+				t.Fatalf("expected subject to be copied, got %q in %#v", subject, call)
+			}
+			if resource := stringArgForCLITest(t, call, "-r"); resource != "Topic:GoadminM681DeleteAclTopic" {
+				t.Fatalf("expected resource to be copied, got %q in %#v", resource, call)
+			}
+			if action := stringArgForCLITest(t, call, "-a"); action != "Pub" {
+				t.Fatalf("expected deleteAcl baseline action Pub, got %q in %#v", action, call)
+			}
+			if decision := stringArgForCLITest(t, call, "-d"); decision != "Allow" {
+				t.Fatalf("expected deleteAcl baseline decision Allow, got %q in %#v", decision, call)
+			}
+		case "deleteAcl":
+			if broker := stringArgForCLITest(t, call, "-b"); broker != "127.0.0.1:31184" {
+				t.Fatalf("expected target broker to be copied, got %q in %#v", broker, call)
+			}
+			if subject := stringArgForCLITest(t, call, "-s"); subject != "User:goadmin-m6-delete-acl" {
+				t.Fatalf("expected subject to be copied, got %q in %#v", subject, call)
+			}
+			if resource := stringArgForCLITest(t, call, "-r"); resource != "Topic:GoadminM681DeleteAclTopic" {
+				t.Fatalf("expected resource to be copied, got %q in %#v", resource, call)
+			}
+		default:
+			t.Fatalf("unexpected command in deleteAcl hook run: %#v", call)
+		}
+	}
+	lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
+	var summary nativeadmin.ShadowBatchSummaryReport
+	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &summary); err != nil {
+		t.Fatalf("expected summary JSON line, got %v", err)
+	}
+	if summary.Executed != 1 || summary.Skipped != 86 || summary.Summary.Mismatches != 0 {
+		t.Fatalf("unexpected deleteAcl summary: %#v", summary)
+	}
+}
+
+func TestRunM6ShadowRunSeedsListsAndDeletesListAclTargetAroundEachProvider(t *testing.T) {
+	fixtures := `{"samples":[{"name":"list-acl","args":["listAcl","-b","127.0.0.1:31185","-s","User:goadmin-m6-list-acl-user"]}]}`
+	runner := &mappedRecordingRunner{
+		outputsByCommand: map[string]string{
+			"deleteUser": "delete user to 127.0.0.1:31185 success.\n",
+			"createUser": "create user to 127.0.0.1:31185 success.\n",
+			"createAcl":  "create acl to 127.0.0.1:31185 success.\n",
+			"listAcl":    "Subject: User:goadmin-m6-list-acl-user\nResource: Topic:goadmin-m6-list-acl-topic\n",
+			"deleteAcl":  "delete acl to 127.0.0.1:31185 success.\n",
+		},
+	}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	code := Run(context.Background(), Options{
+		NameServer: "127.0.0.1:9876",
+		Transport:  "process",
+		Runner:     runner,
+		Stdout:     &stdout,
+		Stderr:     &stderr,
+	}, []string{"--m6-shadow-run", "--m6-shadow-fixtures", fixtures})
+
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d stderr=%q stdout=%q", code, stderr.String(), stdout.String())
+	}
+	commands := runner.commandNames()
+	expected := []string{
+		"deleteUser", "createUser", "createAcl", "listAcl", "deleteAcl", "deleteUser",
+		"deleteUser", "createUser", "createAcl", "listAcl", "deleteAcl", "deleteUser",
+		"deleteUser", "createUser", "createAcl", "listAcl", "deleteAcl", "deleteUser",
+		"deleteUser", "createUser", "createAcl", "listAcl", "deleteAcl", "deleteUser",
+	}
+	if !reflect.DeepEqual(commands, expected) {
+		t.Fatalf("expected listAcl user and baseline seed plus ACL/user cleanup around every provider\nexpected=%#v\nactual=%#v\ncalls=%#v", expected, commands, runner.commands())
+	}
+	for _, call := range runner.commands() {
+		switch call[0] {
+		case "deleteUser":
+			if broker := stringArgForCLITest(t, call, "-b"); broker != "127.0.0.1:31185" {
+				t.Fatalf("expected target broker to be copied, got %q in %#v", broker, call)
+			}
+			if username := stringArgForCLITest(t, call, "-u"); username != "goadmin-m6-list-acl-user" {
+				t.Fatalf("expected username to be copied from subject, got %q in %#v", username, call)
+			}
+		case "createUser":
+			if broker := stringArgForCLITest(t, call, "-b"); broker != "127.0.0.1:31185" {
+				t.Fatalf("expected target broker to be copied, got %q in %#v", broker, call)
+			}
+			if username := stringArgForCLITest(t, call, "-u"); username != "goadmin-m6-list-acl-user" {
+				t.Fatalf("expected username to be copied from subject, got %q in %#v", username, call)
+			}
+			if password := stringArgForCLITest(t, call, "-p"); password != "m6-shadow-acl-pass" {
+				t.Fatalf("expected deterministic seed password, got %q in %#v", password, call)
+			}
+			if userType := stringArgForCLITest(t, call, "-t"); userType != "Super" {
+				t.Fatalf("expected super user type for ACL seed user, got %q in %#v", userType, call)
+			}
+		case "createAcl", "deleteAcl":
+			if broker := stringArgForCLITest(t, call, "-b"); broker != "127.0.0.1:31185" {
+				t.Fatalf("expected target broker to be copied, got %q in %#v", broker, call)
+			}
+			if subject := stringArgForCLITest(t, call, "-s"); subject != "User:goadmin-m6-list-acl-user" {
+				t.Fatalf("expected subject to be copied, got %q in %#v", subject, call)
+			}
+			if resource := stringArgForCLITest(t, call, "-r"); resource != "Topic:goadmin-m6-list-acl-topic" {
+				t.Fatalf("expected derived resource to be copied, got %q in %#v", resource, call)
+			}
+			if call[0] == "createAcl" {
+				if action := stringArgForCLITest(t, call, "-a"); action != "Pub" {
+					t.Fatalf("expected listAcl baseline action Pub, got %q in %#v", action, call)
+				}
+				if decision := stringArgForCLITest(t, call, "-d"); decision != "Allow" {
+					t.Fatalf("expected listAcl baseline decision Allow, got %q in %#v", decision, call)
+				}
+			}
+		case "listAcl":
+			if broker := stringArgForCLITest(t, call, "-b"); broker != "127.0.0.1:31185" {
+				t.Fatalf("expected target broker to be copied, got %q in %#v", broker, call)
+			}
+			if subject := stringArgForCLITest(t, call, "-s"); subject != "User:goadmin-m6-list-acl-user" {
+				t.Fatalf("expected subject to be copied, got %q in %#v", subject, call)
+			}
+		default:
+			t.Fatalf("unexpected command in listAcl hook run: %#v", call)
+		}
+	}
+	lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
+	var summary nativeadmin.ShadowBatchSummaryReport
+	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &summary); err != nil {
+		t.Fatalf("expected summary JSON line, got %v", err)
+	}
+	if summary.Executed != 1 || summary.Skipped != 86 || summary.Summary.Mismatches != 0 {
+		t.Fatalf("unexpected listAcl summary: %#v", summary)
+	}
+}
+
+func TestRunM6ShadowRunSeedsGetsAndDeletesGetAclTargetAroundEachProvider(t *testing.T) {
+	fixtures := `{"samples":[{"name":"get-acl","args":["getAcl","-b","127.0.0.1:31186","-s","User:goadmin-m6-get-acl-user"]}]}`
+	runner := &mappedRecordingRunner{
+		outputsByCommand: map[string]string{
+			"deleteUser": "delete user to 127.0.0.1:31186 success.\n",
+			"createUser": "create user to 127.0.0.1:31186 success.\n",
+			"createAcl":  "create acl to 127.0.0.1:31186 success.\n",
+			"getAcl":     "Subject: User:goadmin-m6-get-acl-user\nResource: Topic:goadmin-m6-get-acl-topic\n",
+			"deleteAcl":  "delete acl to 127.0.0.1:31186 success.\n",
+		},
+	}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	code := Run(context.Background(), Options{
+		NameServer: "127.0.0.1:9876",
+		Transport:  "process",
+		Runner:     runner,
+		Stdout:     &stdout,
+		Stderr:     &stderr,
+	}, []string{"--m6-shadow-run", "--m6-shadow-fixtures", fixtures})
+
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d stderr=%q stdout=%q", code, stderr.String(), stdout.String())
+	}
+	commands := runner.commandNames()
+	expected := []string{
+		"deleteUser", "createUser", "createAcl", "getAcl", "deleteAcl", "deleteUser",
+		"deleteUser", "createUser", "createAcl", "getAcl", "deleteAcl", "deleteUser",
+		"deleteUser", "createUser", "createAcl", "getAcl", "deleteAcl", "deleteUser",
+		"deleteUser", "createUser", "createAcl", "getAcl", "deleteAcl", "deleteUser",
+	}
+	if !reflect.DeepEqual(commands, expected) {
+		t.Fatalf("expected getAcl user and baseline seed plus ACL/user cleanup around every provider\nexpected=%#v\nactual=%#v\ncalls=%#v", expected, commands, runner.commands())
+	}
+	for _, call := range runner.commands() {
+		switch call[0] {
+		case "deleteUser":
+			if broker := stringArgForCLITest(t, call, "-b"); broker != "127.0.0.1:31186" {
+				t.Fatalf("expected target broker to be copied, got %q in %#v", broker, call)
+			}
+			if username := stringArgForCLITest(t, call, "-u"); username != "goadmin-m6-get-acl-user" {
+				t.Fatalf("expected username to be copied from subject, got %q in %#v", username, call)
+			}
+		case "createUser":
+			if broker := stringArgForCLITest(t, call, "-b"); broker != "127.0.0.1:31186" {
+				t.Fatalf("expected target broker to be copied, got %q in %#v", broker, call)
+			}
+			if username := stringArgForCLITest(t, call, "-u"); username != "goadmin-m6-get-acl-user" {
+				t.Fatalf("expected username to be copied from subject, got %q in %#v", username, call)
+			}
+			if password := stringArgForCLITest(t, call, "-p"); password != "m6-shadow-acl-pass" {
+				t.Fatalf("expected deterministic seed password, got %q in %#v", password, call)
+			}
+			if userType := stringArgForCLITest(t, call, "-t"); userType != "Super" {
+				t.Fatalf("expected super user type for ACL seed user, got %q in %#v", userType, call)
+			}
+		case "createAcl", "deleteAcl":
+			if broker := stringArgForCLITest(t, call, "-b"); broker != "127.0.0.1:31186" {
+				t.Fatalf("expected target broker to be copied, got %q in %#v", broker, call)
+			}
+			if subject := stringArgForCLITest(t, call, "-s"); subject != "User:goadmin-m6-get-acl-user" {
+				t.Fatalf("expected subject to be copied, got %q in %#v", subject, call)
+			}
+			if resource := stringArgForCLITest(t, call, "-r"); resource != "Topic:goadmin-m6-get-acl-topic" {
+				t.Fatalf("expected derived resource to be copied, got %q in %#v", resource, call)
+			}
+			if call[0] == "createAcl" {
+				if action := stringArgForCLITest(t, call, "-a"); action != "Pub" {
+					t.Fatalf("expected getAcl baseline action Pub, got %q in %#v", action, call)
+				}
+				if decision := stringArgForCLITest(t, call, "-d"); decision != "Allow" {
+					t.Fatalf("expected getAcl baseline decision Allow, got %q in %#v", decision, call)
+				}
+			}
+		case "getAcl":
+			if broker := stringArgForCLITest(t, call, "-b"); broker != "127.0.0.1:31186" {
+				t.Fatalf("expected target broker to be copied, got %q in %#v", broker, call)
+			}
+			if subject := stringArgForCLITest(t, call, "-s"); subject != "User:goadmin-m6-get-acl-user" {
+				t.Fatalf("expected subject to be copied, got %q in %#v", subject, call)
+			}
+		default:
+			t.Fatalf("unexpected command in getAcl hook run: %#v", call)
+		}
+	}
+	lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
+	var summary nativeadmin.ShadowBatchSummaryReport
+	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &summary); err != nil {
+		t.Fatalf("expected summary JSON line, got %v", err)
+	}
+	if summary.Executed != 1 || summary.Skipped != 86 || summary.Summary.Mismatches != 0 {
+		t.Fatalf("unexpected getAcl summary: %#v", summary)
 	}
 }
 
@@ -876,7 +1721,7 @@ func TestRunM6ShadowRunDeletesCopyUserTargetAroundEachProvider(t *testing.T) {
 	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &summary); err != nil {
 		t.Fatalf("expected summary JSON line, got %v", err)
 	}
-	if summary.Executed != 1 || summary.Skipped != 77 || summary.Summary.Mismatches != 0 {
+	if summary.Executed != 1 || summary.Skipped != 86 || summary.Summary.Mismatches != 0 {
 		t.Fatalf("unexpected copyUser summary: %#v", summary)
 	}
 }

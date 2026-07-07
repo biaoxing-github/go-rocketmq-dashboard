@@ -13,84 +13,93 @@ func TestDefaultM6ShadowPlanIsValid(t *testing.T) {
 	}
 
 	required := map[string]bool{
-		"command-smoke":                        false,
-		"known-message":                        false,
-		"unique-key-message":                   false,
-		"query-msg-trace-by-id":                false,
-		"offset-message":                       false,
-		"recent-topic-message":                 false,
-		"topic-status":                         false,
-		"topic-route":                          false,
-		"topic-cluster-list":                   false,
-		"topic-list":                           false,
-		"cluster-list":                         false,
-		"cluster-list-more-stats":              false,
-		"stats-all":                            false,
-		"consumer-progress":                    false,
-		"consumer-connection":                  false,
-		"list-user":                            false,
-		"get-user":                             false,
-		"create-user":                          false,
-		"update-user":                          false,
-		"copy-user":                            false,
-		"copy-acl":                             false,
-		"list-acl":                             false,
-		"get-acl":                              false,
-		"controller-metadata":                  false,
-		"controller-config":                    false,
-		"get-broker-config":                    false,
-		"get-broker-config-c":                  false,
-		"get-namesrv-config":                   false,
-		"get-consumer-config":                  false,
-		"get-cold-ctr-info":                    false,
-		"get-cold-ctr-info-c":                  false,
-		"allocate-mq":                          false,
-		"broker-status":                        false,
-		"broker-status-c":                      false,
-		"print-message":                        false,
-		"print-message-queue":                  false,
-		"consume-message":                      false,
-		"query-consume-queue":                  false,
-		"check-msg-send-rt":                    false,
-		"send-msg-status":                      false,
-		"send-message":                         false,
-		"send-message-trace":                   false,
-		"reset-master-flush-offset":            false,
-		"clean-expired-cq":                     false,
-		"clean-expired-cq-c":                   false,
-		"clean-unused-topic":                   false,
-		"clean-unused-topic-c":                 false,
-		"delete-expired-commit-log":            false,
-		"delete-expired-commit-log-c":          false,
-		"check-rocksdb-cq-write-progress":      false,
-		"dump-compaction-log":                  false,
-		"export-pop-record":                    false,
-		"export-pop-record-b":                  false,
-		"producer":                             false,
-		"producer-connection":                  false,
-		"rocksdb-config-to-json-local":         false,
-		"rocksdb-config-to-json-groups-local":  false,
-		"rocksdb-config-to-json-offsets-local": false,
-		"export-metadata-in-rocksdb-local":     false,
-		"broker-consume-stats":                 false,
-		"ha-status":                            false,
-		"ha-status-c":                          false,
-		"get-broker-epoch":                     false,
-		"get-broker-epoch-c":                   false,
-		"get-sync-state-set":                   false,
-		"get-sync-state-set-c":                 false,
-		"export-configs":                       false,
-		"export-metadata":                      false,
-		"export-metrics":                       false,
-		"update-namesrv-config":                false,
-		"update-broker-config":                 false,
-		"wipe-write-perm":                      false,
-		"add-write-perm":                       false,
-		"update-kv-config":                     false,
-		"delete-kv-config":                     false,
-		"update-order-conf-get":                false,
-		"message-chain-cold":                   false,
-		"message-chain-warm":                   false,
+		"command-smoke":                          false,
+		"known-message":                          false,
+		"unique-key-message":                     false,
+		"query-msg-trace-by-id":                  false,
+		"offset-message":                         false,
+		"recent-topic-message":                   false,
+		"topic-status":                           false,
+		"topic-route":                            false,
+		"topic-cluster-list":                     false,
+		"topic-list":                             false,
+		"cluster-list":                           false,
+		"cluster-list-more-stats":                false,
+		"stats-all":                              false,
+		"consumer-progress":                      false,
+		"consumer-connection":                    false,
+		"list-user":                              false,
+		"get-user":                               false,
+		"create-user":                            false,
+		"update-user":                            false,
+		"copy-user":                              false,
+		"copy-acl":                               false,
+		"create-acl":                             false,
+		"update-acl":                             false,
+		"delete-acl":                             false,
+		"list-acl":                               false,
+		"get-acl":                                false,
+		"controller-metadata":                    false,
+		"controller-config":                      false,
+		"get-broker-config":                      false,
+		"get-broker-config-c":                    false,
+		"get-namesrv-config":                     false,
+		"get-consumer-config":                    false,
+		"get-cold-ctr-info":                      false,
+		"get-cold-ctr-info-c":                    false,
+		"allocate-mq":                            false,
+		"broker-status":                          false,
+		"broker-status-c":                        false,
+		"print-message":                          false,
+		"print-message-queue":                    false,
+		"consume-message":                        false,
+		"query-consume-queue":                    false,
+		"check-msg-send-rt":                      false,
+		"send-msg-status":                        false,
+		"send-message":                           false,
+		"send-message-trace":                     false,
+		"reset-master-flush-offset":              false,
+		"clean-expired-cq":                       false,
+		"clean-expired-cq-c":                     false,
+		"clean-unused-topic":                     false,
+		"clean-unused-topic-c":                   false,
+		"delete-expired-commit-log":              false,
+		"delete-expired-commit-log-c":            false,
+		"check-rocksdb-cq-write-progress":        false,
+		"dump-compaction-log":                    false,
+		"export-pop-record":                      false,
+		"export-pop-record-b":                    false,
+		"producer":                               false,
+		"producer-connection":                    false,
+		"rocksdb-config-to-json-local":           false,
+		"rocksdb-config-to-json-groups-local":    false,
+		"rocksdb-config-to-json-offsets-local":   false,
+		"export-metadata-in-rocksdb-local":       false,
+		"broker-consume-stats":                   false,
+		"ha-status":                              false,
+		"ha-status-c":                            false,
+		"get-broker-epoch":                       false,
+		"get-broker-epoch-c":                     false,
+		"get-sync-state-set":                     false,
+		"get-sync-state-set-c":                   false,
+		"export-configs":                         false,
+		"export-metadata":                        false,
+		"export-metrics":                         false,
+		"update-namesrv-config":                  false,
+		"update-broker-config":                   false,
+		"update-cold-data-flow-ctr-group-config": false,
+		"remove-cold-data-flow-ctr-group-config": false,
+		"update-topic":                           false,
+		"delete-topic":                           false,
+		"update-sub-group":                       false,
+		"delete-sub-group":                       false,
+		"wipe-write-perm":                        false,
+		"add-write-perm":                         false,
+		"update-kv-config":                       false,
+		"delete-kv-config":                       false,
+		"update-order-conf-get":                  false,
+		"message-chain-cold":                     false,
+		"message-chain-warm":                     false,
 	}
 	for _, sample := range samples {
 		if _, ok := required[sample.Name]; ok {
@@ -131,32 +140,66 @@ func TestDefaultM6ShadowPlanSerializesFixedBodyMessageTargets(t *testing.T) {
 	}
 }
 
+func TestDefaultM6ShadowPlanSerializesBrokerConfigTargets(t *testing.T) {
+	required := map[string]string{
+		"get-broker-config":   "getBrokerConfig -b",
+		"get-broker-config-c": "getBrokerConfig -c",
+	}
+	for _, sample := range DefaultM6ShadowPlan() {
+		command, ok := required[sample.Name]
+		if !ok {
+			continue
+		}
+		if !sample.SerialTargets {
+			t.Fatalf("%s must serialize targets because %s can run native and auto remoting reads against the same broker config concurrently", sample.Name, command)
+		}
+		if !strings.Contains(sample.Notes, "串行") {
+			t.Fatalf("%s notes should explain serial target requirement, got %q", sample.Name, sample.Notes)
+		}
+		delete(required, sample.Name)
+	}
+	if len(required) != 0 {
+		t.Fatalf("expected default M6 plan to contain broker config samples, missing=%#v", required)
+	}
+}
+
 func TestDefaultM6ShadowPlanSerializesMutationTargets(t *testing.T) {
 	required := map[string]struct {
 		command   string
 		noteToken string
 	}{
-		"wipe-write-perm":             {command: "wipeWritePerm", noteToken: "恢复"},
-		"add-write-perm":              {command: "addWritePerm", noteToken: "恢复"},
-		"update-kv-config":            {command: "updateKvConfig", noteToken: "清理"},
-		"delete-kv-config":            {command: "deleteKvConfig", noteToken: "预置"},
-		"create-user":                 {command: "createUser", noteToken: "清理"},
-		"update-user":                 {command: "updateUser", noteToken: "预置"},
-		"copy-user":                   {command: "copyUser", noteToken: "清理"},
-		"copy-acl":                    {command: "copyAcl", noteToken: "预置"},
-		"check-msg-send-rt":           {command: "checkMsgSendRT", noteToken: "串行"},
-		"send-msg-status":             {command: "sendMsgStatus", noteToken: "串行"},
-		"send-message":                {command: "sendMessage", noteToken: "串行"},
-		"send-message-trace":          {command: "sendMessage", noteToken: "串行"},
-		"reset-master-flush-offset":   {command: "resetMasterFlushOffset", noteToken: "串行"},
-		"clean-expired-cq":            {command: "cleanExpiredCQ", noteToken: "串行"},
-		"clean-expired-cq-c":          {command: "cleanExpiredCQ", noteToken: "串行"},
-		"clean-unused-topic":          {command: "cleanUnusedTopic", noteToken: "串行"},
-		"clean-unused-topic-c":        {command: "cleanUnusedTopic", noteToken: "串行"},
-		"delete-expired-commit-log":   {command: "deleteExpiredCommitLog", noteToken: "串行"},
-		"delete-expired-commit-log-c": {command: "deleteExpiredCommitLog", noteToken: "串行"},
-		"update-namesrv-config":       {command: "updateNamesrvConfig", noteToken: "恢复"},
-		"update-broker-config":        {command: "updateBrokerConfig", noteToken: "恢复"},
+		"wipe-write-perm":                        {command: "wipeWritePerm", noteToken: "恢复"},
+		"add-write-perm":                         {command: "addWritePerm", noteToken: "恢复"},
+		"update-kv-config":                       {command: "updateKvConfig", noteToken: "清理"},
+		"delete-kv-config":                       {command: "deleteKvConfig", noteToken: "预置"},
+		"create-user":                            {command: "createUser", noteToken: "清理"},
+		"update-user":                            {command: "updateUser", noteToken: "预置"},
+		"copy-user":                              {command: "copyUser", noteToken: "清理"},
+		"copy-acl":                               {command: "copyAcl", noteToken: "预置"},
+		"create-acl":                             {command: "createAcl", noteToken: "清理"},
+		"update-acl":                             {command: "updateAcl", noteToken: "预置"},
+		"delete-acl":                             {command: "deleteAcl", noteToken: "预置"},
+		"list-acl":                               {command: "listAcl", noteToken: "预置"},
+		"get-acl":                                {command: "getAcl", noteToken: "预置"},
+		"check-msg-send-rt":                      {command: "checkMsgSendRT", noteToken: "串行"},
+		"send-msg-status":                        {command: "sendMsgStatus", noteToken: "串行"},
+		"send-message":                           {command: "sendMessage", noteToken: "串行"},
+		"send-message-trace":                     {command: "sendMessage", noteToken: "串行"},
+		"reset-master-flush-offset":              {command: "resetMasterFlushOffset", noteToken: "串行"},
+		"clean-expired-cq":                       {command: "cleanExpiredCQ", noteToken: "串行"},
+		"clean-expired-cq-c":                     {command: "cleanExpiredCQ", noteToken: "串行"},
+		"clean-unused-topic":                     {command: "cleanUnusedTopic", noteToken: "串行"},
+		"clean-unused-topic-c":                   {command: "cleanUnusedTopic", noteToken: "串行"},
+		"delete-expired-commit-log":              {command: "deleteExpiredCommitLog", noteToken: "串行"},
+		"delete-expired-commit-log-c":            {command: "deleteExpiredCommitLog", noteToken: "串行"},
+		"update-namesrv-config":                  {command: "updateNamesrvConfig", noteToken: "恢复"},
+		"update-broker-config":                   {command: "updateBrokerConfig", noteToken: "恢复"},
+		"update-cold-data-flow-ctr-group-config": {command: "updateColdDataFlowCtrGroupConfig", noteToken: "清理"},
+		"remove-cold-data-flow-ctr-group-config": {command: "removeColdDataFlowCtrGroupConfig", noteToken: "预置"},
+		"update-topic":                           {command: "updateTopic", noteToken: "清理"},
+		"delete-topic":                           {command: "deleteTopic", noteToken: "预置"},
+		"update-sub-group":                       {command: "updateSubGroup", noteToken: "清理"},
+		"delete-sub-group":                       {command: "deleteSubGroup", noteToken: "预置"},
 	}
 	for _, sample := range DefaultM6ShadowPlan() {
 		expectation, ok := required[sample.Name]
@@ -241,8 +284,8 @@ func TestApplyShadowFixtureOverridesMarksConcreteSamplesExecutable(t *testing.T)
 
 	plan := PlanShadowBatch(samples)
 
-	if plan.ExecutableSamples != 2 || plan.SkippedSamples != 76 {
-		t.Fatalf("expected 2 executable and 76 skipped samples, got executable=%d skipped=%d plan=%#v",
+	if plan.ExecutableSamples != 2 || plan.SkippedSamples != 85 {
+		t.Fatalf("expected 2 executable and 85 skipped samples, got executable=%d skipped=%d plan=%#v",
 			plan.ExecutableSamples, plan.SkippedSamples, plan)
 	}
 	if plan.Executable[0].Name != "known-message" {
@@ -294,8 +337,8 @@ func TestApplyShadowFixtureOverridesExpandsRepeatedFixtures(t *testing.T) {
 	}
 	plan := PlanShadowBatch(samples)
 
-	if plan.ExecutableSamples != 20 || plan.SkippedSamples != 77 {
-		t.Fatalf("expected repeat fixture to expand to 20 executable samples and 77 skipped samples, got executable=%d skipped=%d plan=%#v",
+	if plan.ExecutableSamples != 20 || plan.SkippedSamples != 86 {
+		t.Fatalf("expected repeat fixture to expand to 20 executable samples and 86 skipped samples, got executable=%d skipped=%d plan=%#v",
 			plan.ExecutableSamples, plan.SkippedSamples, plan)
 	}
 	for index, sample := range plan.Executable {

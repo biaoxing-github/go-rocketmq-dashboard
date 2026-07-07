@@ -101,11 +101,17 @@ func (p SampleProvider) ClusterFeatures(ctx context.Context) (ClusterFeatureRepo
 	report := BuildClusterFeatureReport("127.0.0.1:9876", clusters, topics, brokerConfigs, nameServerConfigs, nil)
 	halfStatus := sampleTransactionTopicStatus("RMQ_SYS_TRANS_HALF_TOPIC", 18, 7, "2026-07-06 10:08:00,000")
 	opStatus := sampleTransactionTopicStatus("RMQ_SYS_TRANS_OP_HALF_TOPIC", 42, 12, "2026-07-06 10:10:00,000")
-	report.TransactionRuntime = BuildTransactionRuntimeReport(&halfStatus, &opStatus, []MessageDetail{
+	halfMessages := []MessageDetail{
+		{MessageID: "sample-trans-half-oldest", Topic: "RMQ_SYS_TRANS_HALF_TOPIC", BrokerName: "broker-a", QueueID: 0, QueueOffset: 11, StoreTimestamp: time.Now().Add(-38 * time.Minute).UnixMilli(), BodyPreview: "{\"orderId\":\"T10001\"}"},
+		{MessageID: "sample-trans-half-newer", Topic: "RMQ_SYS_TRANS_HALF_TOPIC", BrokerName: "broker-a", QueueID: 1, QueueOffset: 13, StoreTimestamp: time.Now().Add(-8 * time.Minute).UnixMilli(), BodyPreview: "{\"orderId\":\"T10002\"}"},
+	}
+	report.TransactionRuntime = BuildTransactionRuntimeReport(&halfStatus, &opStatus, halfMessages, []MessageDetail{
 		{MessageID: "sample-trans-op-commit", Topic: "RMQ_SYS_TRANS_OP_HALF_TOPIC", BrokerName: "broker-a", QueueID: 0, QueueOffset: 41, StoreTimestamp: time.Now().Add(-2 * time.Minute).UnixMilli(), BodyPreview: "COMMIT_MESSAGE"},
 		{MessageID: "sample-trans-op-rollback", Topic: "RMQ_SYS_TRANS_OP_HALF_TOPIC", BrokerName: "broker-a", QueueID: 1, QueueOffset: 40, StoreTimestamp: time.Now().Add(-6 * time.Minute).UnixMilli(), BodyPreview: "ROLLBACK_MESSAGE"},
 		{MessageID: "sample-trans-op-cleanup", Topic: "RMQ_SYS_TRANS_OP_HALF_TOPIC", BrokerName: "broker-a", QueueID: 2, QueueOffset: 39, StoreTimestamp: time.Now().Add(-12 * time.Minute).UnixMilli(), BodyPreview: "d"},
-	}, nil)
+	}, BuildTransactionConsumerImpact([]ConsumerGroup{
+		{Name: "sample-order-events-consumer", Online: true, DiffTotal: 12},
+	}, topics), nil)
 	return report, nil
 }
 

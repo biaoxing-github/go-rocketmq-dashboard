@@ -241,7 +241,9 @@ func TestClusterFeaturesCollectsTransactionRuntimeStatusAndSamples(t *testing.T)
 		"clusterList": `#Cluster Name           #Broker Name            #BID  #Addr                  #Version              #InTPS(LOAD)                   #OutTPS(LOAD)  #Timer(Progress)        #PCWait(ms)  #Hour         #SPACE    #ACTIVATED
 DefaultCluster          broker-a                0     127.0.0.1:10911     V5_3_2                 0.00(0,0ms)               0.00(0,0ms|N,Nms)  0-0(0.0w, 0.0, 0.0)               0  1446.72       0.1200          true`,
 		"topicList": `RMQ_SYS_TRANS_HALF_TOPIC
-RMQ_SYS_TRANS_OP_HALF_TOPIC`,
+RMQ_SYS_TRANS_OP_HALF_TOPIC
+%RETRY%cg-a
+%DLQ%cg-a`,
 		"getBrokerConfig": `============127.0.0.1:10911============
 brokerName                                        =  broker-a
 brokerRole                                        =  ASYNC_MASTER
@@ -251,6 +253,9 @@ transactionCheckMax                               =  15`,
 rocketmqHome                                      =  /opt/rocketmq`,
 		"topicStatus":      topicStatusOutputForTest("broker-a", 0, 20, 21),
 		"queryMsgByOffset": messageDetailOutputForTest("7F00000100002A9F00000000000123AC", "RMQ_SYS_TRANS_OP_HALF_TOPIC", 0, 20),
+		"consumerProgress": `#Group                            #Count  #Version  #Type  #Model  #TPS     #Diff Total
+cg-a                              1       V5_3_2    PUSH   CLUSTERING  12.00   9
+cg-b                              0       OFFLINE   0.00   0`,
 	})
 	provider := &MQAdminProvider{NameServer: "127.0.0.1:9876", CommandRunner: runner}
 
@@ -264,7 +269,10 @@ rocketmqHome                                      =  /opt/rocketmq`,
 	if len(report.TransactionRuntime.RecentOperations) != 1 || report.TransactionRuntime.RecentOperations[0].MessageID == "" {
 		t.Fatalf("expected recent transaction operation sample, got %#v", report.TransactionRuntime.RecentOperations)
 	}
-	if runner.countCommand("topicStatus") != 2 || runner.countCommand("queryMsgByOffset") != 1 {
+	if report.TransactionRuntime.OldestPendingMessage == nil || report.TransactionRuntime.ConsumerImpact.TotalLag != 9 {
+		t.Fatalf("expected transaction P0 pending sample and consumer impact, got %#v", report.TransactionRuntime)
+	}
+	if runner.countCommand("topicStatus") != 2 || runner.countCommand("queryMsgByOffset") != 2 || runner.countCommand("consumerProgress") != 1 {
 		t.Fatalf("expected transaction topic status and sample commands, calls=%#v", runner.commands())
 	}
 	topics := topicArgsForTest(t, runner.commands())
