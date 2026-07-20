@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -64,6 +65,24 @@ func TestPublicAppDefinesCalledFormatHelpers(t *testing.T) {
 	}
 }
 
+func TestPublicAppExplainsTransportFailures(t *testing.T) {
+	script, err := os.ReadFile("public/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(script)
+	for _, expected := range []string{
+		"Dashboard API request failed",
+		"无法连接 Dashboard 服务",
+		"请求结果未知",
+		"避免重复操作",
+	} {
+		if !strings.Contains(source, expected) {
+			t.Fatalf("public/app.js should explain transport failure with %q", expected)
+		}
+	}
+}
+
 func TestPublicAppRendersTransactionP0HealthFields(t *testing.T) {
 	script, err := os.ReadFile("public/app.js")
 	if err != nil {
@@ -110,6 +129,34 @@ func TestPublicAppRendersTransactionP1DiagnosticFields(t *testing.T) {
 	} {
 		if !strings.Contains(source, expected) {
 			t.Fatalf("public/app.js should render transaction P1 field %q", expected)
+		}
+	}
+}
+
+func TestPublicAppRendersEditableRuntimeConfigControls(t *testing.T) {
+	script, err := os.ReadFile("public/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(script)
+	for _, expected := range []string{
+		"runtimeConfigEditorHTML",
+		"describeRuntimeConfigValue",
+		"applyIndeterminateRuntimeToggles",
+		"handleRuntimeConfigApplyClick",
+		"data-runtime-config-apply",
+		"data-runtime-target-mode",
+		"scope: \"broker\"",
+		"scope: \"nameserver\"",
+		"target: \"*\"",
+		"/api/runtime-config",
+		"handleProxyRuntimeSubmit",
+		"handleProxyRuntimeRestart",
+		"handleProxyRuntimeFieldChange",
+		"data-proxy-switch-state",
+	} {
+		if !strings.Contains(source, expected) {
+			t.Fatalf("public/app.js should include editable runtime config contract %q", expected)
 		}
 	}
 }
@@ -1034,6 +1081,10 @@ func TestTopicMessageSendEndpointCallsProvider(t *testing.T) {
 	provider := &fakeProvider{}
 	app := New(AppConfig{Provider: provider, ClusterCacheTTL: time.Hour})
 	queueID := 1
+	var logs bytes.Buffer
+	previousLogWriter := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(previousLogWriter) })
 
 	body := bytes.NewBufferString(`{"topic":"codex_topic","body":"{\"hello\":\"rocketmq\"}","keys":"codex-key","tags":"qa","brokerName":"broker-a","queueId":1,"traceEnable":true}`)
 	recorder := httptest.NewRecorder()
@@ -1058,6 +1109,12 @@ func TestTopicMessageSendEndpointCallsProvider(t *testing.T) {
 	}
 	if payload.Data.MessageID != "msg-001" || payload.Data.Operation != "sendMessage" {
 		t.Fatalf("unexpected send result: %#v", payload.Data)
+	}
+	if !strings.Contains(logs.String(), `topic message send succeeded topic="codex_topic"`) {
+		t.Fatalf("expected successful send log, got %q", logs.String())
+	}
+	if strings.Contains(logs.String(), `hello`) || strings.Contains(logs.String(), `rocketmq`) {
+		t.Fatalf("send log must not contain message body, got %q", logs.String())
 	}
 }
 

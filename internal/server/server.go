@@ -5,6 +5,7 @@ import (
 	"embed"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -28,6 +29,10 @@ type AppConfig struct {
 	LatencyBudget        time.Duration
 	NameServer           string
 	NameServerOptions    []string
+	// RuntimeConfigEnabled 控制在线配置写入入口，部署环境需要显式开启。
+	RuntimeConfigEnabled bool
+	// ProxyRuntime 管理 Dashboard 容器内的官方 RocketMQ Proxy 进程。
+	ProxyRuntime ProxyRuntime
 }
 
 // App 承载 Dashboard HTTP 路由、RocketMQ Provider 和热点快照仓库。
@@ -51,6 +56,9 @@ type App struct {
 	latencyBudget           time.Duration
 	nameServer              string
 	nameServerOptions       []string
+	runtimeConfigEnabled    bool
+	runtimeConfigMu         sync.Mutex
+	proxyRuntime            ProxyRuntime
 }
 
 // responsePayload 是所有 API 的统一响应结构，方便前端展示耗时、快照状态和缓存命中状态。
@@ -124,6 +132,8 @@ func New(config AppConfig) *App {
 		messageChainCacheTTL: messageChainCacheTTL(config.MessageChainCacheTTL, ttl),
 		latencyBudget:        budget,
 		nameServerOptions:    normalizeNameServerOptions(config.NameServer, config.NameServerOptions),
+		runtimeConfigEnabled: config.RuntimeConfigEnabled,
+		proxyRuntime:         config.ProxyRuntime,
 	}
 	app.installProviderLocked(providerFactory(config.NameServer), config.NameServer)
 	app.routes()
@@ -310,6 +320,9 @@ func (a *App) currentProvider() rocketmq.Provider {
 func (a *App) routes() {
 	a.mux.HandleFunc("/api/health", a.handleHealth)
 	a.mux.HandleFunc("/api/config", a.handleConfig)
+	a.mux.HandleFunc("/api/runtime-config", a.handleRuntimeConfig)
+	a.mux.HandleFunc("/api/runtime-config/proxy", a.handleProxyRuntimeConfig)
+	a.mux.HandleFunc("/api/runtime-config/proxy/restart", a.handleProxyRuntimeRestart)
 	a.mux.HandleFunc("/api/refresh", a.handleRefresh)
 	a.mux.HandleFunc("/api/clusters", a.handleClusters)
 	a.mux.HandleFunc("/api/features", a.handleFeatures)
@@ -605,17 +618,21 @@ func (a *App) handleTopicMessageSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	start := time.Now()
+	log.Printf("topic message send started topic=%q target=%q trace=%t bodyBytes=%d", sendRequest.Topic, sendRequest.TargetLabel(), sendRequest.TraceEnable, len([]byte(sendRequest.Body)))
 	result, err := provider.SendTopicMessage(r.Context(), sendRequest)
+	latency := time.Since(start)
 	if err != nil {
+		log.Printf("topic message send failed topic=%q target=%q latency=%s error=%v", sendRequest.Topic, sendRequest.TargetLabel(), latency, err)
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
+	log.Printf("topic message send succeeded topic=%q target=%q messageId=%q status=%q latency=%s", sendRequest.Topic, sendRequest.TargetLabel(), result.MessageID, result.SendStatus, latency)
 	a.invalidateTopicCaches(sendRequest.Topic)
 	writeJSON(w, http.StatusOK, responsePayload[rocketmq.TopicMessageSendResult]{
 		Code:          0,
 		Message:       "ok",
 		Data:          result,
-		LatencyMillis: time.Since(start).Milliseconds(),
+		LatencyMillis: latency.Milliseconds(),
 	})
 }
 

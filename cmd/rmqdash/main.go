@@ -47,6 +47,25 @@ func main() {
 		return
 	}
 
+	proxyRuntimeManager, proxyRuntimeErr := server.NewProxyRuntimeManager(server.ProxyRuntimeOptions{
+		RuntimeDir:   cfg.ProxyRuntimeDir,
+		JavaPath:     cfg.JavaPath,
+		RocketMQHome: cfg.ProxyRocketMQHome,
+		NameServer:   cfg.NameServer,
+		HeapMB:       cfg.ProxyHeapMB,
+		StartTimeout: cfg.ProxyStartTimeout,
+		StopTimeout:  cfg.ProxyStopTimeout,
+	})
+	if proxyRuntimeErr != nil {
+		log.Printf("RocketMQ Proxy runtime unavailable: %v", proxyRuntimeErr)
+		proxyRuntimeManager = nil
+	} else {
+		defer proxyRuntimeManager.Close()
+		if err := proxyRuntimeManager.Restore(context.Background()); err != nil {
+			log.Printf("RocketMQ Proxy restore failed: %v", err)
+		}
+	}
+
 	app := server.New(server.AppConfig{
 		ProviderFactory:      providerFactory,
 		ClusterCacheTTL:      cfg.ClusterCacheTTL,
@@ -54,6 +73,8 @@ func main() {
 		LatencyBudget:        cfg.CommandMaxLatency,
 		NameServer:           cfg.NameServer,
 		NameServerOptions:    cfg.NameServerOptions,
+		RuntimeConfigEnabled: cfg.RuntimeConfigEnabled,
+		ProxyRuntime:         proxyRuntimeManager,
 	})
 
 	log.Printf("RocketMQ Go Dashboard listening on %s, nameserver=%s", cfg.Addr, cfg.NameServer)

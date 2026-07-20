@@ -70,3 +70,23 @@ func TestLoadDefaultsM6AdminProviderToAuto(t *testing.T) {
 		t.Fatalf("expected default admin provider auto, got %q", cfg.AdminProvider)
 	}
 }
+
+func TestLoadReadsRuntimeConfigAndProxySettings(t *testing.T) {
+	t.Setenv("RMQD_RUNTIME_CONFIG_ENABLED", "true")
+	t.Setenv("RMQD_PROXY_RUNTIME_DIR", "D:/tmp/rocketmq-proxy")
+	t.Setenv("RMQD_PROXY_ROCKETMQ_HOME", "/srv/rocketmq")
+	t.Setenv("RMQD_PROXY_HEAP_MB", "768")
+	t.Setenv("RMQD_PROXY_START_TIMEOUT_MS", "45000")
+	t.Setenv("RMQD_PROXY_STOP_TIMEOUT_MS", "12000")
+
+	cfg := Load()
+	if !cfg.RuntimeConfigEnabled {
+		t.Fatalf("expected runtime config writes enabled")
+	}
+	if cfg.ProxyRuntimeDir != "D:/tmp/rocketmq-proxy" || cfg.ProxyRocketMQHome != "/srv/rocketmq" {
+		t.Fatalf("unexpected proxy paths: dir=%q home=%q", cfg.ProxyRuntimeDir, cfg.ProxyRocketMQHome)
+	}
+	if cfg.ProxyHeapMB != 768 || cfg.ProxyStartTimeout != 45*time.Second || cfg.ProxyStopTimeout != 12*time.Second {
+		t.Fatalf("unexpected proxy runtime limits: heap=%d start=%s stop=%s", cfg.ProxyHeapMB, cfg.ProxyStartTimeout, cfg.ProxyStopTimeout)
+	}
+}

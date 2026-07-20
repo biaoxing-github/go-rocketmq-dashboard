@@ -61,7 +61,7 @@ RUN set -eux; \
 RUN set -eux; \
     groupadd --system rmqdash; \
     useradd --system --gid rmqdash --home-dir /app --shell /usr/sbin/nologin rmqdash; \
-    mkdir -p /app; \
+    mkdir -p /app/runtime; \
     chown -R rmqdash:rmqdash /app
 
 COPY --from=builder /out/rmqdash /usr/local/bin/rmqdash
@@ -83,9 +83,15 @@ ENV HOME=/app \
     RMQD_ADMIN_SIDECAR_ADDR=127.0.0.1:18091 \
     RMQD_ADMIN_SIDECAR_CLASSPATH=/app/rocketmq-admin-sidecar:/opt/rocketmq/lib/* \
     RMQD_ADMIN_SIDECAR_MAIN_CLASS=dev.codex.rocketmq.AdminSidecar \
-    RMQD_ADMIN_SIDECAR_TIMEOUT_MS=3000
+    RMQD_ADMIN_SIDECAR_TIMEOUT_MS=3000 \
+    RMQD_RUNTIME_CONFIG_ENABLED=false \
+    RMQD_PROXY_RUNTIME_DIR=/app/runtime \
+    RMQD_PROXY_ROCKETMQ_HOME=/opt/rocketmq \
+    RMQD_PROXY_HEAP_MB=512 \
+    RMQD_PROXY_START_TIMEOUT_MS=30000 \
+    RMQD_PROXY_STOP_TIMEOUT_MS=30000
 
-EXPOSE 18090
+EXPOSE 18090 8080 8081
 
 USER rmqdash
 

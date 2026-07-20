@@ -29,6 +29,18 @@ type Config struct {
 	AdminSidecarClasspath string
 	AdminSidecarMainClass string
 	AdminSidecarTimeout   time.Duration
+	// RuntimeConfigEnabled 控制在线修改 NameServer、Broker 和 Proxy 配置的写入口。
+	RuntimeConfigEnabled bool
+	// ProxyRuntimeDir 保存 Proxy 持久化状态、生成配置和运行日志。
+	ProxyRuntimeDir string
+	// ProxyRocketMQHome 指向包含官方 Proxy 依赖的 RocketMQ 二进制目录。
+	ProxyRocketMQHome string
+	// ProxyHeapMB 控制 Proxy Java 进程堆大小。
+	ProxyHeapMB int
+	// ProxyStartTimeout 是等待 gRPC 端口启动的最长时间。
+	ProxyStartTimeout time.Duration
+	// ProxyStopTimeout 是等待 Proxy Java 进程停止的最长时间。
+	ProxyStopTimeout time.Duration
 }
 
 // Load 从环境变量读取配置，并填充本地开发可直接运行的默认值。
@@ -55,6 +67,12 @@ func Load() Config {
 		AdminSidecarClasspath: getenv("RMQD_ADMIN_SIDECAR_CLASSPATH", ""),
 		AdminSidecarMainClass: getenv("RMQD_ADMIN_SIDECAR_MAIN_CLASS", "dev.codex.rocketmq.AdminSidecar"),
 		AdminSidecarTimeout:   durationFromMillis("RMQD_ADMIN_SIDECAR_TIMEOUT_MS", 3000),
+		RuntimeConfigEnabled:  boolFromEnv("RMQD_RUNTIME_CONFIG_ENABLED", false),
+		ProxyRuntimeDir:       getenv("RMQD_PROXY_RUNTIME_DIR", defaultProxyRuntimeDir()),
+		ProxyRocketMQHome:     getenv("RMQD_PROXY_ROCKETMQ_HOME", getenv("ROCKETMQ_HOME", "/opt/rocketmq")),
+		ProxyHeapMB:           positiveIntFromEnv("RMQD_PROXY_HEAP_MB", 512),
+		ProxyStartTimeout:     durationFromMillis("RMQD_PROXY_START_TIMEOUT_MS", 30000),
+		ProxyStopTimeout:      durationFromMillis("RMQD_PROXY_STOP_TIMEOUT_MS", 30000),
 	}
 }
 
@@ -105,6 +123,19 @@ func boolFromEnv(name string, fallback bool) bool {
 	}
 }
 
+// positiveIntFromEnv 读取正整数环境变量，非法值回到部署默认值。
+func positiveIntFromEnv(name string, fallback int) int {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return fallback
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value <= 0 {
+		return fallback
+	}
+	return value
+}
+
 func defaultMavenRepository() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -119,4 +150,9 @@ func defaultMQAdminClasspathFile() string {
 		return path
 	}
 	return ""
+}
+
+// defaultProxyRuntimeDir 返回本地开发可写的 Proxy 状态目录；容器部署会显式覆盖到持久卷。
+func defaultProxyRuntimeDir() string {
+	return ".tmp" + string(os.PathSeparator) + "runtime"
 }

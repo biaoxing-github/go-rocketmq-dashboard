@@ -6,6 +6,7 @@ const state = {
   features: null,
   lastFeaturePayload: null,
   featureConfigSearch: "",
+  runtimeConfig: null,
   topics: [],
   lastTopicPayload: null,
   topicSearch: "",
@@ -57,18 +58,45 @@ const state = {
 
 const NAME_SERVER_STORAGE_KEY = "rmqdash.nameServers";
 
+const RUNTIME_CONFIG_ENUMS = {
+  brokerrole: ["ASYNC_MASTER", "SYNC_MASTER", "SLAVE"],
+  flushdisktype: ["ASYNC_FLUSH", "SYNC_FLUSH"]
+};
+
+const RUNTIME_CONFIG_RESTART_KEYS = new Set([
+  "brokerclustername",
+  "brokerid",
+  "brokerip1",
+  "brokerip2",
+  "brokername",
+  "brokerrole",
+  "halistenport",
+  "listenport",
+  "usetls"
+]);
+
 // $ 是页面内最小化的选择器助手，减少重复书写 document.querySelector。
 const $ = (selector) => document.querySelector(selector);
 
 // fetchJSON 统一封装 JSON 请求和错误提取，保证所有 API 入口展示一致的异常信息。
 async function fetchJSON(url, options = {}) {
-  const response = await fetch(url, {
-    ...options,
-    headers: {
-      Accept: "application/json",
-      ...(options.headers || {})
-    }
-  });
+  let response;
+  try {
+    response = await fetch(url, {
+      ...options,
+      headers: {
+        Accept: "application/json",
+        ...(options.headers || {})
+      }
+    });
+  } catch (error) {
+    const method = String(options.method || "GET").toUpperCase();
+    const writeWarning = method === "GET" || method === "HEAD"
+      ? ""
+      : " 请求结果未知，请先查询确认，避免重复操作。";
+    console.error("Dashboard API request failed", { url, method, error });
+    throw new Error(`无法连接 Dashboard 服务，请检查网络或容器状态后重试。${writeWarning}`);
+  }
   const payload = await response.json();
   if (!response.ok) {
     throw new Error(payload.message || `请求失败: ${response.status}`);
@@ -535,7 +563,7 @@ async function switchNameServer(nextNameServer, nextNameServerName = "") {
   }
 }
 
-// loadSnapshots 并行拉取三个只读快照，尽量把首屏响应压进一个 RTT。
+// loadSnapshots 并行拉取核心只读快照和运行配置状态，尽量把首屏响应压进一个 RTT。
 async function loadSnapshots(options = {}) {
   const manageButton = options.manageButton !== false;
   const button = $("#refreshButton");
@@ -544,11 +572,12 @@ async function loadSnapshots(options = {}) {
   }
   $("#snapshotState").textContent = "加载中";
   try {
-    const [clusterPayload, featurePayload, topicPayload, consumerPayload] = await Promise.all([
+    const [clusterPayload, featurePayload, topicPayload, consumerPayload, runtimeConfigPayload] = await Promise.all([
       fetchJSON("/api/clusters"),
       fetchJSON("/api/features"),
       fetchJSON("/api/topics"),
-      fetchJSON("/api/consumers")
+      fetchJSON("/api/consumers"),
+      fetchJSON("/api/runtime-config")
     ]);
     state.clusters = clusterPayload.data || [];
     state.features = featurePayload.data || null;
@@ -556,6 +585,8 @@ async function loadSnapshots(options = {}) {
     state.topics = topicPayload.data || [];
     state.consumers = consumerPayload.data || [];
     state.lastConsumerPayload = consumerPayload;
+    state.runtimeConfig = runtimeConfigPayload.data || null;
+    renderRuntimeConfig(runtimeConfigPayload);
     renderClusters(clusterPayload);
     renderFeatures(featurePayload);
     renderTopics(topicPayload);
@@ -567,6 +598,7 @@ async function loadSnapshots(options = {}) {
     $("#featureStatus").textContent = error.message;
     $("#topicStatus").textContent = error.message;
     $("#consumerStatus").textContent = error.message;
+    $("#runtimeConfigStatus").textContent = error.message;
     $("#snapshotState").textContent = "异常";
   } finally {
     if (manageButton) {
@@ -701,6 +733,190 @@ function renderFeatures(payload) {
   renderSystemTopics(report.systemTopics || []);
   renderNameServerConfigGroups(report.nameServerConfigs || []);
   renderBrokerConfigGroups(report.brokerConfigs || []);
+  applyIndeterminateRuntimeToggles();
+}
+
+// renderRuntimeConfig 展示在线写入能力、Proxy 进程状态和全部 ProxyConfig 字段。
+function renderRuntimeConfig(payload) {
+  state.runtimeConfig = payload?.data || state.runtimeConfig || {};
+  const runtime = state.runtimeConfig || {};
+  const proxy = runtime.proxy || {};
+  const writable = Boolean(runtime.enabled);
+  const proxyWritable = writable && Boolean(proxy.available);
+  $("#runtimeConfigStatus").textContent = `${writable ? "可写" : "只读"} · ${proxyRuntimeStatusText(proxy.status)}`;
+  $("#proxyRuntimeEnabled").checked = Boolean(proxy.enabled);
+  $("#proxyRuntimeEnabled").disabled = !proxyWritable;
+  $("#proxyRuntimeApply").disabled = !proxyWritable;
+  $("#proxyRuntimeRestart").disabled = !proxyWritable || !proxy.enabled;
+  $("#proxyRuntimeSummary").innerHTML = `
+    <div><span>gRPC Proxy</span><strong>${escapeHTML(proxy.enabled ? "开启" : "关闭")}</strong></div>
+    <div><span>进程</span><strong><span class="pill ${proxyRuntimePillClass(proxy.status)}">${escapeHTML(proxyRuntimeStatusText(proxy.status))}</span></strong></div>
+    <div><span>gRPC</span><strong class="mono">${escapeHTML(proxy.grpcEndpoint || "-")}</strong></div>
+    <div><span>Remoting</span><strong class="mono">${escapeHTML(proxy.remotingEndpoint || "-")}</strong></div>
+    <div><span>PID</span><strong>${escapeHTML(proxy.pid || "-")}</strong></div>
+    <div><span>重启次数</span><strong>${escapeHTML(proxy.restartCount || 0)}</strong></div>
+  `;
+  const groups = new Map();
+  (proxy.fields || []).forEach((field) => {
+    const group = field.group || "高级配置";
+    if (!groups.has(group)) {
+      groups.set(group, []);
+    }
+    groups.get(group).push(field);
+  });
+  $("#proxyRuntimeFields").innerHTML = Array.from(groups.entries()).map(([group, fields]) => `
+    <fieldset class="runtime-config-group" ${proxyWritable ? "" : "disabled"}>
+      <legend>${escapeHTML(group)}</legend>
+      <div class="runtime-config-field-grid">
+        ${fields.map(proxyRuntimeFieldHTML).join("")}
+      </div>
+    </fieldset>
+  `).join("") || `<div class="empty-state">当前没有 Proxy 配置。</div>`;
+  if (proxy.lastError) {
+    $("#runtimeConfigNotice").textContent = proxy.lastError;
+  }
+}
+
+// proxyRuntimeFieldHTML 根据后端字段描述生成开关、下拉、数字或文本控件。
+function proxyRuntimeFieldHTML(field) {
+  const control = proxyRuntimeInputHTML(field);
+  return `
+    <label class="runtime-config-field">
+      <span>${escapeHTML(field.label || field.key)}</span>
+      ${control}
+      <small class="mono">${escapeHTML(field.key)}</small>
+      <em>${escapeHTML(field.description || "-")}</em>
+    </label>
+  `;
+}
+
+// proxyRuntimeInputHTML 只使用结构化字段类型，不把配置内容拼接成可执行文本。
+function proxyRuntimeInputHTML(field) {
+  const key = escapeAttr(field.key || "");
+  const type = field.type || "text";
+  if (type === "boolean") {
+    return `
+      <span class="config-switch">
+        <input type="checkbox" data-proxy-setting="${key}" data-value-type="boolean" ${field.value ? "checked" : ""} />
+        <span class="config-switch-track" aria-hidden="true"></span>
+        <span class="config-switch-state" data-proxy-switch-state>${field.value ? "开启" : "关闭"}</span>
+      </span>
+    `;
+  }
+  if (type === "select") {
+    return `
+      <select data-proxy-setting="${key}" data-value-type="select">
+        ${(field.options || []).map((option) => `<option value="${escapeAttr(option)}" ${String(field.value) === String(option) ? "selected" : ""}>${escapeHTML(option)}</option>`).join("")}
+      </select>
+    `;
+  }
+  if (type === "integer" || type === "number") {
+    const min = field.min === undefined || field.min === null ? "" : ` min="${escapeAttr(field.min)}"`;
+    const max = field.max === undefined || field.max === null ? "" : ` max="${escapeAttr(field.max)}"`;
+    const step = type === "integer" ? "1" : "any";
+    return `<input type="number" data-proxy-setting="${key}" data-value-type="${escapeAttr(type)}" value="${escapeAttr(field.value)}" step="${step}"${min}${max} />`;
+  }
+  return `<input type="text" data-proxy-setting="${key}" data-value-type="text" value="${escapeAttr(field.value ?? "")}" />`;
+}
+
+// handleProxyRuntimeFieldChange 同步 Proxy 布尔开关的中文状态，避免控件值和文字提示不一致。
+function handleProxyRuntimeFieldChange(event) {
+  const input = event.target.closest('[data-proxy-setting][data-value-type="boolean"]');
+  if (!input) return;
+  const stateLabel = input.closest(".config-switch")?.querySelector("[data-proxy-switch-state]");
+  if (stateLabel) stateLabel.textContent = input.checked ? "开启" : "关闭";
+}
+
+// handleProxyRuntimeSubmit 保存完整 Proxy JSON 配置，后端在启用状态下完成重启和健康检查。
+async function handleProxyRuntimeSubmit(event) {
+  event.preventDefault();
+  const applyButton = $("#proxyRuntimeApply");
+  const restartButton = $("#proxyRuntimeRestart");
+  setLoading(applyButton, true);
+  restartButton.disabled = true;
+  $("#runtimeConfigNotice").textContent = "应用中";
+  try {
+    const settings = collectProxyRuntimeSettings();
+    const payload = await fetchJSON("/api/runtime-config/proxy", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled: $("#proxyRuntimeEnabled").checked, settings })
+    });
+    state.runtimeConfig = { ...(state.runtimeConfig || {}), proxy: payload.data };
+    renderRuntimeConfig({ data: state.runtimeConfig });
+    $("#runtimeConfigNotice").textContent = payload.data?.enabled
+      ? `Proxy 已应用 · ${payload.data.grpcEndpoint || "gRPC"}`
+      : "Proxy 已关闭，配置已保存";
+  } catch (error) {
+    $("#runtimeConfigNotice").textContent = error.message;
+  } finally {
+    setLoading(applyButton, false);
+    applyButton.disabled = !state.runtimeConfig?.enabled || !state.runtimeConfig?.proxy?.available;
+    restartButton.disabled = !state.runtimeConfig?.enabled || !state.runtimeConfig?.proxy?.available || !state.runtimeConfig?.proxy?.enabled;
+  }
+}
+
+// collectProxyRuntimeSettings 从类型化控件恢复 JSON 标量值。
+function collectProxyRuntimeSettings() {
+  const settings = {};
+  document.querySelectorAll("[data-proxy-setting]").forEach((input) => {
+    const key = input.dataset.proxySetting;
+    const type = input.dataset.valueType;
+    if (type === "boolean") {
+      settings[key] = input.checked;
+      return;
+    }
+    if (type === "integer" || type === "number") {
+      const value = Number(input.value);
+      if (!Number.isFinite(value) || (type === "integer" && !Number.isInteger(value))) {
+        throw new Error(`${key} 必须是${type === "integer" ? "整数" : "数字"}`);
+      }
+      settings[key] = value;
+      return;
+    }
+    settings[key] = input.value.trim();
+  });
+  return settings;
+}
+
+// handleProxyRuntimeRestart 使用已保存配置执行显式重启。
+async function handleProxyRuntimeRestart() {
+  const button = $("#proxyRuntimeRestart");
+  setLoading(button, true);
+  $("#runtimeConfigNotice").textContent = "重启中";
+  try {
+    const payload = await fetchJSON("/api/runtime-config/proxy/restart", { method: "POST" });
+    state.runtimeConfig = { ...(state.runtimeConfig || {}), proxy: payload.data };
+    renderRuntimeConfig({ data: state.runtimeConfig });
+    $("#runtimeConfigNotice").textContent = `Proxy 已重启 · ${payload.data?.grpcEndpoint || "gRPC"}`;
+  } catch (error) {
+    $("#runtimeConfigNotice").textContent = error.message;
+  } finally {
+    setLoading(button, false);
+    button.disabled = !state.runtimeConfig?.enabled || !state.runtimeConfig?.proxy?.available || !state.runtimeConfig?.proxy?.enabled;
+  }
+}
+
+// proxyRuntimeStatusText 返回适合运维扫描的进程状态。
+function proxyRuntimeStatusText(status) {
+  switch (status) {
+    case "running": return "运行中";
+    case "starting": return "启动中";
+    case "stopping": return "停止中";
+    case "stopped": return "已停止";
+    case "disabled": return "已关闭";
+    case "error": return "异常";
+    case "unavailable": return "运行环境缺失";
+    default: return "未知";
+  }
+}
+
+// proxyRuntimePillClass 把进程状态映射到现有状态颜色。
+function proxyRuntimePillClass(status) {
+  if (status === "running") return "pill-ok";
+  if (status === "starting" || status === "stopping") return "pill-info";
+  if (status === "error" || status === "unavailable") return "pill-warn";
+  return "pill-muted";
 }
 
 function renderFeatureSummary(report) {
@@ -1018,10 +1234,13 @@ function renderCommonConfigPanels(panels) {
       </div>
     </section>
   `).join("");
+  applyIndeterminateRuntimeToggles();
 }
 
+// commonConfigItemHTML 把中文说明和面向全部 Broker 的批量编辑器放在同一个运维项中。
 function commonConfigItemHTML(item) {
   const evidence = (item.evidence || []).slice(0, 2);
+  const values = runtimeConfigValues("broker", item.key);
   return `
     <article class="common-config-item common-config-${escapeAttr(item.status || "unknown")}">
       <div class="common-config-title">
@@ -1032,6 +1251,14 @@ function commonConfigItemHTML(item) {
       <p>${escapeHTML(item.description || "-")}</p>
       <small>${escapeHTML(item.impact || "-")}</small>
       ${evidence.length ? `<ul>${evidence.map((entry) => `<li>${escapeHTML(entry)}</li>`).join("")}</ul>` : ""}
+      ${runtimeConfigEditorHTML({
+        scope: "broker",
+        target: "*",
+        key: item.key,
+        values,
+        fallbackValue: item.value,
+        targetLabel: "全部 Broker"
+      })}
     </article>
   `;
 }
@@ -1093,9 +1320,14 @@ function renderNameServerConfigGroups(groups) {
         <span>${escapeHTML(group.nameServer || "NameServer")}</span>
         <strong>${escapeHTML(group.entries?.length || 0)} 项</strong>
       </summary>
-      ${configEntriesTableHTML(group.entries || [], "暂无 NameServer 配置项。")}
+      ${configEntriesTableHTML(group.entries || [], "暂无 NameServer 配置项。", {
+        scope: "nameserver",
+        target: group.nameServer,
+        allTargetLabel: "全部 NameServer"
+      })}
     </details>
   `).join("");
+  applyIndeterminateRuntimeToggles();
 }
 
 function renderBrokerConfigGroups(groups) {
@@ -1118,10 +1350,15 @@ function renderBrokerConfigGroups(groups) {
         <div class="summary-grid config-highlight-grid">
           ${configHighlightHTML(group)}
         </div>
-        ${configEntriesTableHTML(entries, keyword ? "没有匹配的配置项。" : "暂无 Broker 配置项。")}
+        ${configEntriesTableHTML(entries, keyword ? "没有匹配的配置项。" : "暂无 Broker 配置项。", {
+          scope: "broker",
+          target: group.brokerAddr,
+          allTargetLabel: "全部 Broker"
+        })}
       </details>
     `;
   }).join("");
+  applyIndeterminateRuntimeToggles();
 }
 
 function configHighlightHTML(group) {
@@ -1136,14 +1373,263 @@ function configHighlightHTML(group) {
   return rows.join("") || `<div><span>摘要</span><strong>-</strong></div>`;
 }
 
-function configEntriesTableHTML(entries, emptyText) {
+// configEntriesTableHTML 为完整配置保留原值，同时为每一项提供当前节点或全部节点写入入口。
+function configEntriesTableHTML(entries, emptyText, options = {}) {
   const rows = entries.map((entry) => `
     <tr>
       ${tableCell("Key", escapeHTML(entry.key || "-"), "mono wrap-cell")}
-      ${tableCell("Value", escapeHTML(entry.value || "-"), "mono wrap-cell")}
+      ${tableCell("当前值", escapeHTML(entry.value || "-"), "mono wrap-cell")}
+      ${tableCell("在线修改", runtimeConfigEditorHTML({
+        scope: options.scope,
+        target: options.target,
+        key: entry.key,
+        values: [entry.value],
+        fallbackValue: entry.value,
+        allowAllTargets: true,
+        allTargetLabel: options.allTargetLabel
+      }), "runtime-config-table-cell")}
     </tr>
   `).join("");
-  return dataTableHTML(["Key", "Value"], rows, emptyText);
+  return dataTableHTML(["Key", "当前值", "在线修改"], rows, emptyText);
+}
+
+// runtimeConfigValues 读取当前能力快照中指定 key 的全部节点值，用于识别批量混合状态。
+function runtimeConfigValues(scope, key) {
+  const groups = scope === "nameserver"
+    ? state.features?.nameServerConfigs || []
+    : state.features?.brokerConfigs || [];
+  const values = [];
+  groups.forEach((group) => {
+    (group.entries || []).forEach((entry) => {
+      if (String(entry.key || "").toLowerCase() === String(key || "").toLowerCase()) {
+        values.push(String(entry.value ?? "").trim());
+      }
+    });
+  });
+  return values;
+}
+
+// runtimeConfigEditorHTML 根据配置原值生成开关、枚举、数字或文本控件和目标选择器。
+function runtimeConfigEditorHTML(options) {
+  const scope = options.scope === "nameserver" ? "nameserver" : "broker";
+  const target = String(options.target || "").trim();
+  const key = String(options.key || "").trim();
+  const descriptor = describeRuntimeConfigValue(key, options.values || [], options.fallbackValue);
+  const writable = runtimeClusterWritable() && Boolean(target && key);
+  const disabled = writable ? "" : " disabled";
+  const targetLabel = options.targetLabel || (scope === "nameserver" ? "当前 NameServer" : "当前 Broker");
+  const targetControl = options.allowAllTargets && target !== "*"
+    ? `
+      <select class="runtime-config-target" data-runtime-target-mode aria-label="${escapeAttr(key)} 生效范围"${disabled}>
+        <option value="${escapeAttr(target)}">${scope === "nameserver" ? "当前 NameServer" : "当前 Broker"}</option>
+        <option value="*">${escapeHTML(options.allTargetLabel || (scope === "nameserver" ? "全部 NameServer" : "全部 Broker"))}</option>
+      </select>
+    `
+    : `<span class="runtime-config-target-label">${escapeHTML(targetLabel)}</span>`;
+  const restartPill = runtimeConfigRequiresRestart(key)
+    ? `<span class="pill pill-warn runtime-config-restart-pill">需重启</span>`
+    : "";
+  return `
+    <div class="runtime-config-editor"
+      data-runtime-scope="${escapeAttr(scope)}"
+      data-runtime-target="${escapeAttr(target)}"
+      data-runtime-key="${escapeAttr(key)}"
+      data-runtime-mixed="${descriptor.mixed ? "true" : "false"}"
+      data-runtime-dirty="false">
+      <div class="runtime-config-control">
+        ${runtimeConfigInputHTML(key, descriptor, writable)}
+      </div>
+      <div class="runtime-config-editor-actions">
+        ${targetControl}
+        ${restartPill}
+        <button class="route-action runtime-config-apply" type="button" data-runtime-config-apply${disabled}>应用</button>
+      </div>
+      <small class="runtime-config-result" data-runtime-config-result aria-live="polite"></small>
+    </div>
+  `;
+}
+
+// describeRuntimeConfigValue 使用与后端一致的顺序推断枚举、布尔、整数、数字和文本类型。
+function describeRuntimeConfigValue(key, rawValues, fallbackValue) {
+  const values = rawValues.length
+    ? rawValues.map((value) => String(value ?? "").trim())
+    : [String(fallbackValue ?? "").trim()];
+  const uniqueValues = Array.from(new Set(values));
+  const normalizedKey = String(key || "").trim().toLowerCase();
+  const enumOptions = RUNTIME_CONFIG_ENUMS[normalizedKey] || [];
+  if (enumOptions.length) {
+    const selected = uniqueValues.length === 1
+      ? enumOptions.find((option) => option.toLowerCase() === uniqueValues[0].toLowerCase()) || uniqueValues[0]
+      : "";
+    return { type: "select", value: selected, options: enumOptions, mixed: uniqueValues.length > 1 };
+  }
+  const booleans = values.map(parseRuntimeConfigBoolean);
+  if (booleans.every((value) => value !== null)) {
+    const uniqueBooleans = Array.from(new Set(booleans));
+    return { type: "boolean", value: uniqueBooleans[0], options: [], mixed: uniqueBooleans.length > 1 };
+  }
+  if (values.every(isRuntimeConfigInteger)) {
+    return { type: "integer", value: uniqueValues.length === 1 ? uniqueValues[0] : "", options: [], mixed: uniqueValues.length > 1 };
+  }
+  if (values.every(isRuntimeConfigNumber)) {
+    return { type: "number", value: uniqueValues.length === 1 ? uniqueValues[0] : "", options: [], mixed: uniqueValues.length > 1 };
+  }
+  return { type: "text", value: uniqueValues.length === 1 ? uniqueValues[0] : "", options: [], mixed: uniqueValues.length > 1 };
+}
+
+// runtimeConfigInputHTML 输出单一标量控件；混合值保留空态，必须由用户明确选择后才能应用。
+function runtimeConfigInputHTML(key, descriptor, writable) {
+  const disabled = writable ? "" : " disabled";
+  const mixedAttr = descriptor.mixed ? " data-runtime-indeterminate=\"true\"" : "";
+  const ariaLabel = escapeAttr(`${key} 新值`);
+  if (descriptor.type === "boolean") {
+    const stateText = descriptor.mixed ? "不一致" : descriptor.value ? "开启" : "关闭";
+    return `
+      <label class="config-switch">
+        <input type="checkbox" data-runtime-input data-value-type="boolean" aria-label="${ariaLabel}"${descriptor.value ? " checked" : ""}${mixedAttr}${disabled} />
+        <span class="config-switch-track" aria-hidden="true"></span>
+        <span class="config-switch-state" data-runtime-switch-state>${stateText}</span>
+      </label>
+    `;
+  }
+  if (descriptor.type === "select") {
+    const mixedOption = descriptor.mixed ? `<option value="" selected disabled>选择新值</option>` : "";
+    return `
+      <select data-runtime-input data-value-type="select" aria-label="${ariaLabel}"${disabled}>
+        ${mixedOption}
+        ${descriptor.options.map((option) => `<option value="${escapeAttr(option)}" ${String(descriptor.value) === String(option) ? "selected" : ""}>${escapeHTML(option)}</option>`).join("")}
+      </select>
+    `;
+  }
+  if (descriptor.type === "integer" || descriptor.type === "number") {
+    return `<input type="number" data-runtime-input data-value-type="${escapeAttr(descriptor.type)}" aria-label="${ariaLabel}" value="${escapeAttr(descriptor.value)}" step="${descriptor.type === "integer" ? "1" : "any"}" placeholder="${descriptor.mixed ? "多个节点值不一致" : ""}"${disabled} />`;
+  }
+  return `<input type="text" data-runtime-input data-value-type="text" aria-label="${ariaLabel}" value="${escapeAttr(descriptor.value)}" placeholder="${descriptor.mixed ? "多个节点值不一致" : ""}"${disabled} />`;
+}
+
+// runtimeClusterWritable 同时检查部署总开关和当前 Provider 的命令能力。
+function runtimeClusterWritable() {
+  return Boolean(state.runtimeConfig?.enabled && state.runtimeConfig?.clusterWritable);
+}
+
+// parseRuntimeConfigBoolean 与 Go strconv.ParseBool 的常用配置字面量保持一致。
+function parseRuntimeConfigBoolean(value) {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (["1", "t", "true"].includes(normalized)) return true;
+  if (["0", "f", "false"].includes(normalized)) return false;
+  return null;
+}
+
+// isRuntimeConfigInteger 只把完整十进制整数字符串识别为整数输入。
+function isRuntimeConfigInteger(value) {
+  return /^[+-]?\d+$/.test(String(value ?? "").trim());
+}
+
+// isRuntimeConfigNumber 识别后端 ParseFloat 可以正常接收的有限数字。
+function isRuntimeConfigNumber(value) {
+  const text = String(value ?? "").trim();
+  return text !== "" && Number.isFinite(Number(text));
+}
+
+// runtimeConfigRequiresRestart 与后端重启键判断保持一致，在写入前给出影响提示。
+function runtimeConfigRequiresRestart(key) {
+  const normalized = String(key || "").trim().toLowerCase();
+  return RUNTIME_CONFIG_RESTART_KEYS.has(normalized)
+    || normalized.startsWith("storepath")
+    || normalized.endsWith("listenport");
+}
+
+// applyIndeterminateRuntimeToggles 恢复 DOM 无法通过 HTML 属性直接表达的混合开关状态。
+function applyIndeterminateRuntimeToggles() {
+  document.querySelectorAll('input[data-runtime-indeterminate="true"]').forEach((input) => {
+    input.indeterminate = true;
+    input.setAttribute("aria-checked", "mixed");
+  });
+}
+
+// handleRuntimeConfigFieldChange 标记用户已明确修改混合值，并同步开关状态文字。
+function handleRuntimeConfigFieldChange(event) {
+  const input = event.target.closest("[data-runtime-input]");
+  if (!input) return;
+  const editor = input.closest(".runtime-config-editor");
+  if (!editor) return;
+  editor.dataset.runtimeDirty = "true";
+  if (input.type === "checkbox") {
+    input.indeterminate = false;
+    input.dataset.runtimeIndeterminate = "false";
+    input.setAttribute("aria-checked", input.checked ? "true" : "false");
+    const stateLabel = editor.querySelector("[data-runtime-switch-state]");
+    if (stateLabel) stateLabel.textContent = input.checked ? "开启" : "关闭";
+  }
+}
+
+// collectRuntimeConfigValue 校验控件状态并转换成后端 updateConfig 命令需要的字符串。
+function collectRuntimeConfigValue(editor) {
+  const input = editor.querySelector("[data-runtime-input]");
+  const key = editor.dataset.runtimeKey || "配置项";
+  if (!input) throw new Error(`${key} 缺少编辑控件`);
+  if (editor.dataset.runtimeMixed === "true" && editor.dataset.runtimeDirty !== "true") {
+    throw new Error(`${key} 当前节点值不一致，请先明确选择新值`);
+  }
+  if (input.type === "checkbox") {
+    if (input.indeterminate) throw new Error(`${key} 当前节点值不一致，请先明确选择开关状态`);
+    return input.checked ? "true" : "false";
+  }
+  const value = String(input.value ?? "").trim();
+  if (input.dataset.valueType === "select" && !value) {
+    throw new Error(`${key} 必须选择一个值`);
+  }
+  if (input.dataset.valueType === "integer" && !isRuntimeConfigInteger(value)) {
+    throw new Error(`${key} 必须是整数`);
+  }
+  if (input.dataset.valueType === "number" && !isRuntimeConfigNumber(value)) {
+    throw new Error(`${key} 必须是数字`);
+  }
+  return value;
+}
+
+// handleRuntimeConfigApplyClick 执行单节点或批量写入，并展示回读、变化数量和重启要求。
+async function handleRuntimeConfigApplyClick(event) {
+  const button = event.target.closest("[data-runtime-config-apply]");
+  if (!button) return;
+  const editor = button.closest(".runtime-config-editor");
+  if (!editor) return;
+  const resultElement = editor.querySelector("[data-runtime-config-result]");
+  try {
+    if (!runtimeClusterWritable()) throw new Error("当前部署未开启 Broker/NameServer 在线配置写入");
+    const targetSelector = editor.querySelector("[data-runtime-target-mode]");
+    const request = {
+      scope: editor.dataset.runtimeScope,
+      target: targetSelector?.value || editor.dataset.runtimeTarget,
+      key: editor.dataset.runtimeKey,
+      value: collectRuntimeConfigValue(editor)
+    };
+    setLoading(button, true);
+    resultElement.textContent = "应用中";
+    resultElement.classList.remove("runtime-config-result-error");
+    $("#runtimeConfigNotice").textContent = `${request.key} 应用中`;
+    const payload = await fetchJSON("/api/runtime-config", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(request)
+    });
+    const results = payload.data?.results || [];
+    const changed = results.filter((item) => item.changed).length;
+    const restartRequired = Boolean(payload.data?.restartRequired);
+    const message = `${request.key} 已回读确认 · ${results.length} 个节点 · ${changed} 个变更${restartRequired ? " · 需要重启对应组件" : ""}`;
+    resultElement.textContent = message;
+    editor.dataset.runtimeMixed = "false";
+    editor.dataset.runtimeDirty = "false";
+    await loadSnapshots({ manageButton: false });
+    $("#runtimeConfigNotice").textContent = message;
+  } catch (error) {
+    resultElement.textContent = error.message;
+    resultElement.classList.add("runtime-config-result-error");
+    $("#runtimeConfigNotice").textContent = error.message;
+  } finally {
+    setLoading(button, false);
+    button.disabled = !runtimeClusterWritable();
+  }
 }
 
 function filterConfigEntries(group, keyword) {
@@ -3356,6 +3842,12 @@ $("#nameServerDialogCancel").addEventListener("click", closeNameServerDialog);
 $("#nameServerForm").addEventListener("submit", handleNameServerSubmit);
 $("#detailDialogClose").addEventListener("click", closeDetailDialog);
 $("#refreshButton").addEventListener("click", forceRefreshSnapshots);
+$("#proxyRuntimeForm").addEventListener("submit", handleProxyRuntimeSubmit);
+$("#proxyRuntimeForm").addEventListener("change", handleProxyRuntimeFieldChange);
+$("#proxyRuntimeRestart").addEventListener("click", handleProxyRuntimeRestart);
+document.addEventListener("click", handleRuntimeConfigApplyClick);
+document.addEventListener("input", handleRuntimeConfigFieldChange);
+document.addEventListener("change", handleRuntimeConfigFieldChange);
 $("#topicSearchInput").addEventListener("input", handleTopicSearchInput);
 $("#topicSearchClear").addEventListener("click", clearTopicSearch);
 $("#featureConfigSearch").addEventListener("input", handleFeatureConfigSearchInput);

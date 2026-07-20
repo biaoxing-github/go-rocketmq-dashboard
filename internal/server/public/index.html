@@ -188,6 +188,36 @@
             </div>
           </section>
 
+          <section class="feature-section runtime-config-section">
+            <div class="detail-section-head">
+              <h3>在线配置与服务</h3>
+              <span id="runtimeConfigStatus">等待状态</span>
+            </div>
+            <div id="proxyRuntimeSummary" class="summary-grid runtime-config-summary">
+              <div><span>gRPC Proxy</span><strong>-</strong></div>
+              <div><span>进程</span><strong>-</strong></div>
+              <div><span>gRPC</span><strong>-</strong></div>
+              <div><span>重启次数</span><strong>-</strong></div>
+            </div>
+            <form id="proxyRuntimeForm" class="proxy-runtime-form">
+              <div class="runtime-config-toolbar">
+                <label class="runtime-toggle" for="proxyRuntimeEnabled">
+                  <input id="proxyRuntimeEnabled" type="checkbox" />
+                  <span class="runtime-toggle-track" aria-hidden="true"></span>
+                  <strong>gRPC Proxy</strong>
+                </label>
+                <div class="runtime-config-actions">
+                  <button id="proxyRuntimeApply" class="button button-primary" type="submit">保存并应用</button>
+                  <button id="proxyRuntimeRestart" class="button button-secondary" type="button">重启 Proxy</button>
+                </div>
+              </div>
+              <div id="proxyRuntimeFields" class="runtime-config-groups">
+                <div class="empty-state">等待 Proxy 配置。</div>
+              </div>
+            </form>
+            <div id="runtimeConfigNotice" class="mutation-notice" role="status">等待配置操作。</div>
+          </section>
+
           <section class="feature-section">
             <div class="detail-section-head">
               <h3>常用配置中文面板</h3>
