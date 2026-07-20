@@ -279,6 +279,14 @@ func normalizeShadowOutputForCommand(command string, output shadowComparableOutp
 		output.Stdout = normalized.Stdout
 		output.Stderr = normalized.Stderr
 	}
+	if command == "clusterList" {
+		normalized := normalizeClusterListShadowOutput(ShadowOutput{
+			Stdout: output.Stdout,
+			Stderr: output.Stderr,
+		})
+		output.Stdout = normalized.Stdout
+		output.Stderr = normalized.Stderr
+	}
 	if command == "producer" {
 		normalized := normalizeProducerShadowOutput(ShadowOutput{
 			Stdout: output.Stdout,
@@ -345,7 +353,19 @@ func brokerStatusShadowKey(prefix string) string {
 }
 
 func isBrokerStatusDynamicShadowKey(key string) bool {
-	return key == "runtime" || key == "timerReadBehind" || strings.HasSuffix(key, "Tps") || strings.HasSuffix(key, "TPS") || strings.HasSuffix(key, "Throughput")
+	return key == "runtime" || key == "timerReadBehind" || key == "commitLogDirCapacity" || strings.HasSuffix(key, "Tps") || strings.HasSuffix(key, "TPS") || strings.HasSuffix(key, "Throughput")
+}
+
+var clusterListTimerProgressPattern = regexp.MustCompile(`(\s)[0-9]+-[0-9]+\([0-9.]+w, [0-9.]+, [0-9.]+\)(\s+)`)
+var clusterListHourPattern = regexp.MustCompile(`(\s)[0-9]+\.[0-9]{2}(\s+[0-9]+\.[0-9]{4}\s+(?:true|false)\s*)$`)
+
+// normalizeClusterListShadowOutput 仅屏蔽 clusterList 表格中的运行态 Timer(Progress) 与 Hour 采样值。
+func normalizeClusterListShadowOutput(output ShadowOutput) ShadowOutput {
+	output.Stdout = clusterListTimerProgressPattern.ReplaceAllString(output.Stdout, `${1}<timer-progress>${2}`)
+	output.Stdout = normalizeShadowTextLines(output.Stdout, func(line string) string {
+		return clusterListHourPattern.ReplaceAllString(line, `${1}<hour>${2}`)
+	})
+	return output
 }
 
 var producerLastUpdateTimestampPattern = regexp.MustCompile(`\blastUpdateTimestamp=[0-9]+`)

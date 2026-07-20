@@ -328,6 +328,103 @@ func (err *OfficialParserError) Error() string {
 	return strings.TrimRight(err.Stderr, "\r\n")
 }
 
+// OfficialCommandResult 表示官方 mqadmin 会正常退出，但仍需要保留 stdout/stderr 分流的命令结果。
+type OfficialCommandResult struct {
+	// ExitCode 是官方 mqadmin 进程退出码。
+	ExitCode int
+	// Stdout 是官方 mqadmin 写到 stdout 的文本。
+	Stdout string
+	// Stderr 是官方 mqadmin 写到 stderr 的文本。
+	Stderr string
+}
+
+func (result *OfficialCommandResult) Error() string {
+	if result == nil {
+		return ""
+	}
+	if strings.TrimSpace(result.Stderr) != "" {
+		return strings.TrimRight(result.Stderr, "\r\n")
+	}
+	return strings.TrimRight(result.Stdout, "\r\n")
+}
+
+func officialGetBrokerEpochControllerModeStderr(remark string) string {
+	return "org.apache.rocketmq.tools.command.SubCommandException: GetBrokerEpochSubCommand command failed\n" +
+		"\tat org.apache.rocketmq.tools.command.broker.GetBrokerEpochSubCommand.execute(GetBrokerEpochSubCommand.java:87)\n" +
+		"\tat org.apache.rocketmq.tools.command.MQAdminStartup.main0(MQAdminStartup.java:181)\n" +
+		"\tat org.apache.rocketmq.tools.command.MQAdminStartup.main(MQAdminStartup.java:131)\n" +
+		"Caused by: org.apache.rocketmq.client.exception.MQBrokerException: CODE: 1  DESC: " + remark + "\n" +
+		"For more information, please visit the url, https://rocketmq.apache.org/docs/bestPractice/06FAQ\n" +
+		"\tat org.apache.rocketmq.client.impl.MQClientAPIImpl.getBrokerEpochCache(MQClientAPIImpl.java:3321)\n" +
+		"\tat org.apache.rocketmq.tools.admin.DefaultMQAdminExtImpl.getBrokerEpochCache(DefaultMQAdminExtImpl.java:1892)\n" +
+		"\tat org.apache.rocketmq.tools.admin.DefaultMQAdminExt.getBrokerEpochCache(DefaultMQAdminExt.java:841)\n" +
+		"\tat org.apache.rocketmq.tools.command.broker.GetBrokerEpochSubCommand.printData(GetBrokerEpochSubCommand.java:110)\n" +
+		"\tat org.apache.rocketmq.tools.command.broker.GetBrokerEpochSubCommand.innerExec(GetBrokerEpochSubCommand.java:102)\n" +
+		"\tat org.apache.rocketmq.tools.command.broker.GetBrokerEpochSubCommand.execute(GetBrokerEpochSubCommand.java:84)\n" +
+		"\t... 2 more\n"
+}
+
+// OfficialGetBrokerEpochControllerModeStderr 返回官方 getBrokerEpoch 在非 controllerMode Broker 上的 stderr。
+func OfficialGetBrokerEpochControllerModeStderr(remark string) string {
+	return officialGetBrokerEpochControllerModeStderr(remark)
+}
+
+func officialTopicRouteMissingNameServerStderr() string {
+	return "org.apache.rocketmq.tools.command.SubCommandException: TopicRouteSubCommand command failed\n" +
+		"\tat org.apache.rocketmq.tools.command.topic.TopicRouteSubCommand.execute(TopicRouteSubCommand.java:74)\n" +
+		"\tat org.apache.rocketmq.tools.command.MQAdminStartup.main0(MQAdminStartup.java:181)\n" +
+		"\tat org.apache.rocketmq.tools.command.MQAdminStartup.main(MQAdminStartup.java:131)\n" +
+		"Caused by: org.apache.rocketmq.remoting.exception.RemotingConnectException: connect to null failed\n" +
+		"\tat org.apache.rocketmq.remoting.netty.NettyRemotingClient.invokeSync(NettyRemotingClient.java:584)\n" +
+		"\tat org.apache.rocketmq.client.impl.MQClientAPIImpl.getTopicRouteInfoFromNameServer(MQClientAPIImpl.java:2090)\n" +
+		"\tat org.apache.rocketmq.client.impl.MQClientAPIImpl.getTopicRouteInfoFromNameServer(MQClientAPIImpl.java:2081)\n" +
+		"\tat org.apache.rocketmq.tools.admin.DefaultMQAdminExtImpl.examineTopicRouteInfo(DefaultMQAdminExtImpl.java:602)\n" +
+		"\tat org.apache.rocketmq.tools.admin.DefaultMQAdminExt.examineTopicRouteInfo(DefaultMQAdminExt.java:346)\n" +
+		"\tat org.apache.rocketmq.tools.command.topic.TopicRouteSubCommand.execute(TopicRouteSubCommand.java:71)\n" +
+		"\t... 2 more\n"
+}
+
+// OfficialTopicRouteMissingNameServerStderr 返回官方 topicRoute 未配置 namesrvAddr 时的 stderr。
+func OfficialTopicRouteMissingNameServerStderr() string {
+	return officialTopicRouteMissingNameServerStderr()
+}
+
+func officialTopicClusterListMissingNameServerStderr() string {
+	return "org.apache.rocketmq.tools.command.SubCommandException: TopicClusterSubCommand command failed\n" +
+		"\tat org.apache.rocketmq.tools.command.topic.TopicClusterSubCommand.execute(TopicClusterSubCommand.java:61)\n" +
+		"\tat org.apache.rocketmq.tools.command.MQAdminStartup.main0(MQAdminStartup.java:181)\n" +
+		"\tat org.apache.rocketmq.tools.command.MQAdminStartup.main(MQAdminStartup.java:131)\n" +
+		"Caused by: org.apache.rocketmq.remoting.exception.RemotingConnectException: connect to null failed\n" +
+		"\tat org.apache.rocketmq.remoting.netty.NettyRemotingClient.invokeSync(NettyRemotingClient.java:584)\n" +
+		"\tat org.apache.rocketmq.client.impl.MQClientAPIImpl.getBrokerClusterInfo(MQClientAPIImpl.java:2060)\n" +
+		"\tat org.apache.rocketmq.tools.admin.DefaultMQAdminExtImpl.examineBrokerClusterInfo(DefaultMQAdminExtImpl.java:596)\n" +
+		"\tat org.apache.rocketmq.tools.admin.DefaultMQAdminExtImpl.getTopicClusterList(DefaultMQAdminExtImpl.java:1655)\n" +
+		"\tat org.apache.rocketmq.tools.admin.DefaultMQAdminExt.getTopicClusterList(DefaultMQAdminExt.java:683)\n" +
+		"\tat org.apache.rocketmq.tools.command.topic.TopicClusterSubCommand.execute(TopicClusterSubCommand.java:56)\n" +
+		"\t... 2 more\n"
+}
+
+// OfficialTopicClusterListMissingNameServerStderr 返回官方 topicClusterList 未配置 namesrvAddr 时的 stderr。
+func OfficialTopicClusterListMissingNameServerStderr() string {
+	return officialTopicClusterListMissingNameServerStderr()
+}
+
+func officialQueryMsgTraceByIDNoMessageStderr() string {
+	return "org.apache.rocketmq.tools.command.SubCommandException: QueryMsgTraceByIdSubCommandcommand failed\n" +
+		"\tat org.apache.rocketmq.tools.command.message.QueryMsgTraceByIdSubCommand.execute(QueryMsgTraceByIdSubCommand.java:110)\n" +
+		"\tat org.apache.rocketmq.tools.command.MQAdminStartup.main0(MQAdminStartup.java:181)\n" +
+		"\tat org.apache.rocketmq.tools.command.MQAdminStartup.main(MQAdminStartup.java:131)\n" +
+		"Caused by: org.apache.rocketmq.client.exception.MQClientException: CODE: 208  DESC: query message by key finished, but no message.\n" +
+		"For more information, please visit the url, https://rocketmq.apache.org/docs/bestPractice/06FAQ\n" +
+		"\tat org.apache.rocketmq.client.impl.MQAdminImpl.queryMessage(MQAdminImpl.java:482)\n" +
+		"\tat org.apache.rocketmq.client.impl.MQAdminImpl.queryMessage(MQAdminImpl.java:282)\n" +
+		"\tat org.apache.rocketmq.tools.admin.DefaultMQAdminExtImpl.queryMessage(DefaultMQAdminExtImpl.java:1765)\n" +
+		"\tat org.apache.rocketmq.tools.admin.DefaultMQAdminExt.queryMessage(DefaultMQAdminExt.java:155)\n" +
+		"\tat org.apache.rocketmq.tools.command.message.QueryMsgTraceByIdSubCommand.queryTraceByMsgId(QueryMsgTraceByIdSubCommand.java:120)\n" +
+		"\tat org.apache.rocketmq.tools.command.message.QueryMsgTraceByIdSubCommand.execute(QueryMsgTraceByIdSubCommand.java:108)\n" +
+		"\t... 2 more\n"
+}
+
 type rocketMQResponseError struct {
 	// Code 是 RocketMQ ResponseCode 数值。
 	Code int
@@ -3101,6 +3198,15 @@ func runNativeCommand(ctx context.Context, args []string, client nativeCommandCl
 			results, err = client.GetBrokerEpochByCluster(ctx, nameServer, clusterName)
 		}
 		if err != nil {
+			if brokerName == "" {
+				var responseErr *rocketMQResponseError
+				if errors.As(err, &responseErr) && isGetBrokerEpochControllerModeError(responseErr) {
+					return "", true, &OfficialCommandResult{
+						ExitCode: 0,
+						Stderr:   officialGetBrokerEpochControllerModeStderr(responseErr.Remark),
+					}
+				}
+			}
 			return "", true, err
 		}
 		return formatBrokerEpoch(results), true, nil
@@ -3857,12 +3963,12 @@ func runNativeCommand(ctx context.Context, args []string, client nativeCommandCl
 		return formatAllocateMQ(assignments), true, nil
 	case "topicroute":
 		nameServer := stringArg(args[1:], "-n", "--namesrvAddr")
-		if nameServer == "" {
-			return "", true, errors.New("NameServer 必填")
-		}
 		topic := stringArg(args[1:], "-t", "--topic")
 		if topic == "" {
 			return "", true, errors.New("Topic 必填")
+		}
+		if nameServer == "" {
+			return "", true, &OfficialCommandResult{ExitCode: 0, Stderr: officialTopicRouteMissingNameServerStderr()}
 		}
 		if client == nil {
 			client = NewClient(0)
@@ -3907,12 +4013,12 @@ func runNativeCommand(ctx context.Context, args []string, client nativeCommandCl
 		return formatTopicStatus(entries), true, nil
 	case "topicclusterlist":
 		nameServer := stringArg(args[1:], "-n", "--namesrvAddr")
-		if nameServer == "" {
-			return "", true, errors.New("NameServer 必填")
-		}
 		topic := stringArg(args[1:], "-t", "--topic")
 		if topic == "" {
 			return "", true, errors.New("Topic 必填")
+		}
+		if nameServer == "" {
+			return "", true, &OfficialCommandResult{ExitCode: 0, Stderr: officialTopicClusterListMissingNameServerStderr()}
 		}
 		if client == nil {
 			client = NewClient(0)
@@ -4750,6 +4856,9 @@ func runNativeCommand(ctx context.Context, args []string, client nativeCommandCl
 		views, err := client.QueryMessageTraceByID(ctx, nameServer, traceTopic, msgID, beginTimestamp, endTimestamp, maxNum)
 		if err != nil {
 			return "", true, err
+		}
+		if len(views) == 0 {
+			return "", true, &OfficialCommandResult{ExitCode: 0, Stderr: officialQueryMsgTraceByIDNoMessageStderr()}
 		}
 		return formatMessageTrace(views), true, nil
 	default:
@@ -7950,7 +8059,8 @@ func (c *Client) GetBrokerEpoch(ctx context.Context, nameServer string, brokerNa
 	}
 	brokerData, ok := clusterInfo.BrokerAddrTable[brokerName]
 	if !ok {
-		return nil, fmt.Errorf("brokerName %s 未返回 Broker 地址", brokerName)
+		// 官方 mqadmin 在 brokerName 未命中 NameServer 路由时静默输出空结果。
+		return nil, nil
 	}
 	return c.getBrokerEpochFromBrokerData(ctx, brokerData)
 }
@@ -7982,6 +8092,13 @@ func (c *Client) GetBrokerEpochByCluster(ctx context.Context, nameServer string,
 		}
 		current, err := c.getBrokerEpochFromBrokerData(ctx, brokerData)
 		if err != nil {
+			var responseErr *rocketMQResponseError
+			if errors.As(err, &responseErr) && isGetBrokerEpochControllerModeError(responseErr) {
+				return nil, &OfficialCommandResult{
+					ExitCode: 0,
+					Stderr:   officialGetBrokerEpochControllerModeStderr(responseErr.Remark),
+				}
+			}
 			return nil, err
 		}
 		results = append(results, current...)
@@ -8018,9 +8135,16 @@ func (c *Client) fetchBrokerEpoch(ctx context.Context, brokerAddr string) (broke
 		return brokerEpochResult{}, err
 	}
 	if response.Code != responseCodeSuccess {
-		return brokerEpochResult{}, fmt.Errorf("Broker getBrokerEpoch failed: broker=%s code=%d remark=%s", brokerAddr, response.Code, response.Remark)
+		return brokerEpochResult{}, &rocketMQResponseError{Code: response.Code, Remark: response.Remark}
 	}
 	return decodeBrokerEpochCache(response.Body)
+}
+
+func isGetBrokerEpochControllerModeError(err *rocketMQResponseError) bool {
+	if err == nil {
+		return false
+	}
+	return err.Code == 1 && strings.TrimSpace(err.Remark) == "this request only for controllerMode"
 }
 
 // ResetMasterFlushOffset 复现官方 resetMasterFlushOffset，直连指定 Broker 重置 master flush offset。

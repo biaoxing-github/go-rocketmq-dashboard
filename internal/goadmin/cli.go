@@ -105,6 +105,12 @@ func Run(ctx context.Context, options Options, args []string) int {
 	}
 	output, err := runCommand(ctx, options, commandArgs)
 	if err != nil {
+		var officialResult *nativeadmin.OfficialCommandResult
+		if errors.As(err, &officialResult) {
+			_, _ = fmt.Fprint(options.Stdout, officialResult.Stdout)
+			_, _ = fmt.Fprint(options.Stderr, officialResult.Stderr)
+			return officialResult.ExitCode
+		}
 		var parserErr *nativeadmin.OfficialParserError
 		if errors.As(err, &parserErr) {
 			_, _ = fmt.Fprint(options.Stdout, output)
@@ -667,9 +673,16 @@ func runM6ShadowBatch(ctx context.Context, options Options, fixturesJSON string,
 		m6ShadowBrokerConfigBeforeRun(options),
 		m6ShadowColdDataFlowCtrBeforeRun(options),
 		m6ShadowUpdateTopicBeforeRun(options),
+		m6ShadowUpdateTopicListBeforeRun(options),
+		m6ShadowUpdateTopicPermBeforeRun(options),
+		m6ShadowSetConsumeModeBeforeRun(options),
+		m6ShadowResetOffsetBeforeRun(options),
 		m6ShadowDeleteTopicBeforeRun(options),
 		m6ShadowUpdateSubGroupBeforeRun(options),
+		m6ShadowUpdateSubGroupListBeforeRun(options),
 		m6ShadowDeleteSubGroupBeforeRun(options),
+		m6ShadowOrderConfPutBeforeRun(options),
+		m6ShadowOrderConfDeleteBeforeRun(options),
 		m6ShadowKVBeforeRun(options),
 		m6ShadowUpdateUserBeforeRun(options),
 		m6ShadowCreateUserBeforeRun(options),
@@ -690,9 +703,16 @@ func runM6ShadowBatch(ctx context.Context, options Options, fixturesJSON string,
 		m6ShadowCreateUserAfterRun(options),
 		m6ShadowUpdateUserAfterRun(options),
 		m6ShadowKVAfterRun(options),
+		m6ShadowOrderConfDeleteAfterRun(options),
+		m6ShadowOrderConfPutAfterRun(options),
 		m6ShadowDeleteSubGroupAfterRun(options),
+		m6ShadowUpdateSubGroupListAfterRun(options),
 		m6ShadowUpdateSubGroupAfterRun(options),
 		m6ShadowDeleteTopicAfterRun(options),
+		m6ShadowResetOffsetAfterRun(options),
+		m6ShadowSetConsumeModeAfterRun(options),
+		m6ShadowUpdateTopicPermAfterRun(options),
+		m6ShadowUpdateTopicListAfterRun(options),
 		m6ShadowUpdateTopicAfterRun(options),
 		m6ShadowColdDataFlowCtrAfterRun(options),
 		m6ShadowBrokerConfigAfterRun(options),
@@ -1089,7 +1109,103 @@ func m6ShadowUpdateTopicAfterRun(options Options) func(context.Context, []string
 	}
 }
 
+// m6ShadowUpdateTopicPermBeforeRun 将目标 Topic 权限恢复为 perm=6，确保每路 provider 从相同权限开始。
+func m6ShadowUpdateTopicPermBeforeRun(options Options) func(context.Context, []string) error {
+	return m6ShadowUpdateTopicPermRestoreHook(options, "before")
+}
+
+// m6ShadowUpdateTopicPermAfterRun 将目标 Topic 权限恢复为 perm=6，保持隔离 fixture 可重复执行。
+func m6ShadowUpdateTopicPermAfterRun(options Options) func(context.Context, []string) error {
+	return m6ShadowUpdateTopicPermRestoreHook(options, "after")
+}
+
+// m6ShadowSetConsumeModeBeforeRun 将目标消费模式恢复为 POP/q=1，确保每路 provider 从相同基线开始。
+func m6ShadowSetConsumeModeBeforeRun(options Options) func(context.Context, []string) error {
+	return m6ShadowSetConsumeModeRestoreHook(options, "before")
+}
+
+// m6ShadowSetConsumeModeAfterRun 将目标消费模式恢复为 POP/q=1，保持固定 Broker 配置可重复执行。
+func m6ShadowSetConsumeModeAfterRun(options Options) func(context.Context, []string) error {
+	return m6ShadowSetConsumeModeRestoreHook(options, "after")
+}
+
+// m6ShadowResetOffsetBeforeRun 清理旧消费位点并重建订阅组，确保每路 provider 从相同空位点开始。
+func m6ShadowResetOffsetBeforeRun(options Options) func(context.Context, []string) error {
+	return func(ctx context.Context, args []string) error {
+		cleanupArgs, prepareArgs, ok := m6ShadowResetOffsetLifecycleArgs(args)
+		if !ok {
+			return nil
+		}
+		if err := runM6ShadowSubGroupFixtureCommand(ctx, options, args, cleanupArgs, "before"); err != nil {
+			return err
+		}
+		return runM6ShadowSubGroupFixtureCommand(ctx, options, args, prepareArgs, "before")
+	}
+}
+
+// m6ShadowResetOffsetAfterRun 删除订阅组和消费位点，保持隔离 fixture 可重复执行。
+func m6ShadowResetOffsetAfterRun(options Options) func(context.Context, []string) error {
+	return func(ctx context.Context, args []string) error {
+		cleanupArgs, _, ok := m6ShadowResetOffsetLifecycleArgs(args)
+		if !ok {
+			return nil
+		}
+		return runM6ShadowSubGroupFixtureCommand(ctx, options, args, cleanupArgs, "after")
+	}
+}
+
+// m6ShadowSetConsumeModeRestoreHook 构造并执行消费模式基线恢复钩子。
+func m6ShadowSetConsumeModeRestoreHook(options Options, phase string) func(context.Context, []string) error {
+	return func(ctx context.Context, args []string) error {
+		restoreArgs, ok := m6ShadowSetConsumeModeRestoreArgs(args)
+		if !ok {
+			return nil
+		}
+		return runM6ShadowTopicFixtureCommand(ctx, options, args, restoreArgs, phase)
+	}
+}
+
+// m6ShadowUpdateTopicPermRestoreHook 构造并执行 updateTopicPerm 权限恢复钩子。
+func m6ShadowUpdateTopicPermRestoreHook(options Options, phase string) func(context.Context, []string) error {
+	return func(ctx context.Context, args []string) error {
+		restoreArgs, ok := m6ShadowUpdateTopicPermRestoreArgs(args)
+		if !ok {
+			return nil
+		}
+		return runM6ShadowTopicFixtureCommand(ctx, options, args, restoreArgs, phase)
+	}
+}
+
 // m6ShadowUpdateSubGroupBeforeRun 清理 updateSubGroup 目标订阅组，确保每路 provider 都执行真实创建或更新路径。
+// m6ShadowUpdateTopicListBeforeRun 清理批量文件中的所有 Topic，确保每路 provider 从同一空状态开始。
+func m6ShadowUpdateTopicListBeforeRun(options Options) func(context.Context, []string) error {
+	return m6ShadowUpdateTopicListCleanupHook(options, "before")
+}
+
+// m6ShadowUpdateTopicListAfterRun 清理批量命令写入的所有 Topic，保持 fixture 可重复执行。
+func m6ShadowUpdateTopicListAfterRun(options Options) func(context.Context, []string) error {
+	return m6ShadowUpdateTopicListCleanupHook(options, "after")
+}
+
+// m6ShadowUpdateTopicListCleanupHook 为批量 Topic 样本构造逐项清理钩子。
+func m6ShadowUpdateTopicListCleanupHook(options Options, phase string) func(context.Context, []string) error {
+	return func(ctx context.Context, args []string) error {
+		cleanupArgs, ok, err := m6ShadowUpdateTopicListCleanupArgs(args)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return nil
+		}
+		for _, topicArgs := range cleanupArgs {
+			if err := runM6ShadowTopicFixtureCommand(ctx, options, args, topicArgs, phase); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+}
+
 func m6ShadowUpdateSubGroupBeforeRun(options Options) func(context.Context, []string) error {
 	return func(ctx context.Context, args []string) error {
 		cleanupArgs, ok := m6ShadowUpdateSubGroupCleanupArgs(args)
@@ -1108,6 +1224,34 @@ func m6ShadowUpdateSubGroupAfterRun(options Options) func(context.Context, []str
 			return nil
 		}
 		return runM6ShadowSubGroupFixtureCommand(ctx, options, args, cleanupArgs, "after")
+	}
+}
+
+// m6ShadowUpdateSubGroupListBeforeRun 清理批量文件中的所有订阅组，确保每路 provider 从同一空状态开始。
+func m6ShadowUpdateSubGroupListBeforeRun(options Options) func(context.Context, []string) error {
+	return m6ShadowUpdateSubGroupListCleanupHook(options, "before")
+}
+
+// m6ShadowUpdateSubGroupListAfterRun 清理批量命令写入的所有订阅组，保持 fixture 可重复执行。
+func m6ShadowUpdateSubGroupListAfterRun(options Options) func(context.Context, []string) error {
+	return m6ShadowUpdateSubGroupListCleanupHook(options, "after")
+}
+
+func m6ShadowUpdateSubGroupListCleanupHook(options Options, phase string) func(context.Context, []string) error {
+	return func(ctx context.Context, args []string) error {
+		cleanupArgs, ok, err := m6ShadowUpdateSubGroupListCleanupArgs(args)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return nil
+		}
+		for _, groupArgs := range cleanupArgs {
+			if err := runM6ShadowSubGroupFixtureCommand(ctx, options, args, groupArgs, phase); err != nil {
+				return err
+			}
+		}
+		return nil
 	}
 }
 
@@ -1202,11 +1346,171 @@ func m6ShadowUpdateTopicCleanupArgs(args []string) ([]string, bool) {
 	return m6ShadowDeleteTopicArgs(args, "deleteTopic")
 }
 
+// m6ShadowUpdateTopicPermRestoreArgs 从目标命令复制路由参数并固定生成 perm=6 恢复命令。
+func m6ShadowUpdateTopicPermRestoreArgs(args []string) ([]string, bool) {
+	if !strings.EqualFold(commandName(args), "updateTopicPerm") {
+		return nil, false
+	}
+	topic := strings.TrimSpace(cliStringArg(args[1:], "-t", "--topic"))
+	if topic == "" {
+		return nil, false
+	}
+	restoreArgs := []string{"updateTopicPerm"}
+	if nameServers := strings.TrimSpace(cliStringArg(args[1:], "-n", "--namesrvAddr")); nameServers != "" {
+		restoreArgs = append(restoreArgs, "-n", nameServers)
+	}
+	brokerAddr := strings.TrimSpace(cliStringArg(args[1:], "-b", "--brokerAddr"))
+	clusterName := strings.TrimSpace(cliStringArg(args[1:], "-c", "--clusterName"))
+	switch {
+	case brokerAddr != "":
+		restoreArgs = append(restoreArgs, "-b", brokerAddr)
+	case clusterName != "":
+		restoreArgs = append(restoreArgs, "-c", clusterName)
+	default:
+		return nil, false
+	}
+	restoreArgs = append(restoreArgs, "-t", topic, "-p", "6")
+	return restoreArgs, true
+}
+
+// m6ShadowSetConsumeModeRestoreArgs 从目标命令复制路由与业务参数并固定生成 POP/q=1 恢复命令。
+func m6ShadowSetConsumeModeRestoreArgs(args []string) ([]string, bool) {
+	if !strings.EqualFold(commandName(args), "setConsumeMode") {
+		return nil, false
+	}
+	topic := strings.TrimSpace(cliStringArg(args[1:], "-t", "--topicName"))
+	group := strings.TrimSpace(cliStringArg(args[1:], "-g", "--groupName"))
+	if topic == "" || group == "" {
+		return nil, false
+	}
+	restoreArgs := []string{"setConsumeMode"}
+	if nameServers := strings.TrimSpace(cliStringArg(args[1:], "-n", "--namesrvAddr")); nameServers != "" {
+		restoreArgs = append(restoreArgs, "-n", nameServers)
+	}
+	brokerAddr := strings.TrimSpace(cliStringArg(args[1:], "-b", "--brokerAddr"))
+	clusterName := strings.TrimSpace(cliStringArg(args[1:], "-c", "--clusterName"))
+	switch {
+	case brokerAddr != "":
+		restoreArgs = append(restoreArgs, "-b", brokerAddr)
+	case clusterName != "":
+		restoreArgs = append(restoreArgs, "-c", clusterName)
+	default:
+		return nil, false
+	}
+	restoreArgs = append(restoreArgs, "-t", topic, "-g", group, "-m", "POP", "-q", "1")
+	return restoreArgs, true
+}
+
+// m6ShadowResetOffsetLifecycleArgs 从全队列或指定队列重置命令派生集群级订阅组清理和重建命令。
+func m6ShadowResetOffsetLifecycleArgs(args []string) ([]string, []string, bool) {
+	if !strings.EqualFold(commandName(args), "resetOffsetByTime") {
+		return nil, nil, false
+	}
+	nameServers := strings.TrimSpace(cliStringArg(args[1:], "-n", "--namesrvAddr"))
+	clusterName := strings.TrimSpace(cliStringArg(args[1:], "-c", "--clusterName"))
+	groupName := strings.TrimSpace(cliStringArg(args[1:], "-g", "--group"))
+	brokerAddr := strings.TrimSpace(cliStringArg(args[1:], "-b", "--brokerAddr"))
+	queueID := strings.TrimSpace(cliStringArg(args[1:], "-q", "--queueId"))
+	offset := strings.TrimSpace(cliStringArg(args[1:], "-o", "--offset"))
+	if nameServers == "" || clusterName == "" || groupName == "" {
+		return nil, nil, false
+	}
+	selectors := 0
+	for _, value := range []string{brokerAddr, queueID, offset} {
+		if value != "" {
+			selectors++
+		}
+	}
+	if selectors != 0 && selectors != 3 {
+		return nil, nil, false
+	}
+	cleanupArgs := []string{"deleteSubGroup", "-n", nameServers, "-c", clusterName, "-g", groupName, "-r", "true"}
+	prepareArgs := []string{"updateSubGroup", "-n", nameServers, "-c", clusterName, "-g", groupName}
+	return cleanupArgs, prepareArgs, true
+}
+
+// m6ShadowUpdateTopicListCleanupArgs 从 TopicConfig JSON 派生每个 Topic 的官方 deleteTopic 参数。
+func m6ShadowUpdateTopicListCleanupArgs(args []string) ([][]string, bool, error) {
+	if !strings.EqualFold(commandName(args), "updateTopicList") {
+		return nil, false, nil
+	}
+	filename := strings.TrimSpace(cliStringArg(args[1:], "-f", "--filename"))
+	if filename == "" {
+		return nil, false, errors.New("updateTopicList shadow fixture requires -f/--filename")
+	}
+	content, err := os.ReadFile(filename)
+	if err != nil {
+		return nil, false, fmt.Errorf("read updateTopicList shadow fixture %q: %w", filename, err)
+	}
+	var topics []struct {
+		TopicName string `json:"topicName"`
+	}
+	if err := json.Unmarshal(content, &topics); err != nil {
+		return nil, false, fmt.Errorf("parse updateTopicList shadow fixture %q: %w", filename, err)
+	}
+	if len(topics) == 0 {
+		return nil, false, fmt.Errorf("updateTopicList shadow fixture %q contains no topics", filename)
+	}
+	cleanupArgs := make([][]string, 0, len(topics))
+	for _, topic := range topics {
+		topicName := strings.TrimSpace(topic.TopicName)
+		if topicName == "" {
+			return nil, false, fmt.Errorf("updateTopicList shadow fixture %q contains an empty topicName", filename)
+		}
+		topicArgs := append([]string(nil), args...)
+		topicArgs = append(topicArgs, "-t", topicName)
+		deleteArgs, ok := m6ShadowDeleteTopicArgs(topicArgs, "deleteTopic")
+		if !ok {
+			return nil, false, errors.New("updateTopicList shadow fixture requires -c/--clusterName")
+		}
+		cleanupArgs = append(cleanupArgs, deleteArgs)
+	}
+	return cleanupArgs, true, nil
+}
+
 func m6ShadowUpdateSubGroupCleanupArgs(args []string) ([]string, bool) {
 	if !strings.EqualFold(commandName(args), "updateSubGroup") {
 		return nil, false
 	}
 	return m6ShadowSubGroupArgs(args, "deleteSubGroup")
+}
+
+func m6ShadowUpdateSubGroupListCleanupArgs(args []string) ([][]string, bool, error) {
+	if !strings.EqualFold(commandName(args), "updateSubGroupList") {
+		return nil, false, nil
+	}
+	filename := strings.TrimSpace(cliStringArg(args[1:], "-f", "--filename"))
+	if filename == "" {
+		return nil, false, errors.New("updateSubGroupList shadow fixture requires -f/--filename")
+	}
+	content, err := os.ReadFile(filename)
+	if err != nil {
+		return nil, false, fmt.Errorf("read updateSubGroupList shadow fixture %q: %w", filename, err)
+	}
+	var groups []struct {
+		GroupName string `json:"groupName"`
+	}
+	if err := json.Unmarshal(content, &groups); err != nil {
+		return nil, false, fmt.Errorf("parse updateSubGroupList shadow fixture %q: %w", filename, err)
+	}
+	if len(groups) == 0 {
+		return nil, false, fmt.Errorf("updateSubGroupList shadow fixture %q contains no groups", filename)
+	}
+	cleanupArgs := make([][]string, 0, len(groups))
+	for _, group := range groups {
+		groupName := strings.TrimSpace(group.GroupName)
+		if groupName == "" {
+			return nil, false, fmt.Errorf("updateSubGroupList shadow fixture %q contains an empty groupName", filename)
+		}
+		groupArgs := append([]string(nil), args...)
+		groupArgs = append(groupArgs, "-g", groupName)
+		deleteArgs, ok := m6ShadowSubGroupArgs(groupArgs, "deleteSubGroup")
+		if !ok {
+			return nil, false, errors.New("updateSubGroupList shadow fixture requires -b/--brokerAddr or -c/--clusterName")
+		}
+		cleanupArgs = append(cleanupArgs, deleteArgs)
+	}
+	return cleanupArgs, true, nil
 }
 
 func m6ShadowDeleteSubGroupPrepareArgs(args []string) ([]string, bool) {
@@ -1260,6 +1564,103 @@ func m6ShadowDeleteTopicArgs(args []string, command string) ([]string, bool) {
 	}
 	topicArgs = append(topicArgs, "-c", clusterName, "-t", topic)
 	return topicArgs, true
+}
+
+// m6ShadowOrderConfDeleteBeforeRun 为 delete orderConf 样本预置同一 KV，确保每路 provider 删除真实存在的配置。
+func m6ShadowOrderConfDeleteBeforeRun(options Options) func(context.Context, []string) error {
+	return func(ctx context.Context, args []string) error {
+		prepareArgs, ok := m6ShadowOrderConfDeletePrepareArgs(args)
+		if !ok {
+			return nil
+		}
+		return runM6ShadowKVCommand(ctx, options, args, prepareArgs, "before")
+	}
+}
+
+// m6ShadowOrderConfDeleteAfterRun 清理 delete orderConf 样本可能留下的 KV，保持 fixture 可重复执行。
+func m6ShadowOrderConfDeleteAfterRun(options Options) func(context.Context, []string) error {
+	return func(ctx context.Context, args []string) error {
+		cleanupArgs, ok := m6ShadowOrderConfDeleteCleanupArgs(args)
+		if !ok {
+			return nil
+		}
+		return runM6ShadowKVCommand(ctx, options, args, cleanupArgs, "after")
+	}
+}
+
+// m6ShadowOrderConfPutBeforeRun 在 put orderConf 样本执行前删除同一 KV，确保每路 provider 从空状态开始。
+func m6ShadowOrderConfPutBeforeRun(options Options) func(context.Context, []string) error {
+	return func(ctx context.Context, args []string) error {
+		cleanupArgs, ok := m6ShadowOrderConfPutCleanupArgs(args)
+		if !ok {
+			return nil
+		}
+		return runM6ShadowKVCommand(ctx, options, args, cleanupArgs, "before")
+	}
+}
+
+// m6ShadowOrderConfPutAfterRun 清理 put orderConf 样本写入的 KV，保持 fixture 可重复执行。
+func m6ShadowOrderConfPutAfterRun(options Options) func(context.Context, []string) error {
+	return func(ctx context.Context, args []string) error {
+		cleanupArgs, ok := m6ShadowOrderConfPutCleanupArgs(args)
+		if !ok {
+			return nil
+		}
+		return runM6ShadowKVCommand(ctx, options, args, cleanupArgs, "after")
+	}
+}
+
+// m6ShadowOrderConfPutCleanupArgs 从 put 目标派生同一 Topic key 的 delete 清理命令。
+func m6ShadowOrderConfPutCleanupArgs(args []string) ([]string, bool) {
+	if !m6ShadowIsOrderConfPut(args) {
+		return nil, false
+	}
+	return m6ShadowOrderConfArgs(args, "delete", "")
+}
+
+// m6ShadowOrderConfDeletePrepareArgs 从 delete 目标派生固定值的 put 预置命令。
+func m6ShadowOrderConfDeletePrepareArgs(args []string) ([]string, bool) {
+	if !m6ShadowIsOrderConfDelete(args) {
+		return nil, false
+	}
+	return m6ShadowOrderConfArgs(args, "put", "m6-shadow-order-conf:1")
+}
+
+// m6ShadowOrderConfDeleteCleanupArgs 从 delete 目标派生同一 Topic key 的 delete 清理命令。
+func m6ShadowOrderConfDeleteCleanupArgs(args []string) ([]string, bool) {
+	if !m6ShadowIsOrderConfDelete(args) {
+		return nil, false
+	}
+	return m6ShadowOrderConfArgs(args, "delete", "")
+}
+
+// m6ShadowIsOrderConfDelete 判断当前参数是否为 updateOrderConf delete 样本。
+func m6ShadowIsOrderConfDelete(args []string) bool {
+	return strings.EqualFold(commandName(args), "updateOrderConf") &&
+		strings.EqualFold(strings.TrimSpace(cliStringArg(args[1:], "-m", "--method")), "delete")
+}
+
+// m6ShadowIsOrderConfPut 判断当前参数是否为 updateOrderConf put 样本。
+func m6ShadowIsOrderConfPut(args []string) bool {
+	return strings.EqualFold(commandName(args), "updateOrderConf") &&
+		strings.EqualFold(strings.TrimSpace(cliStringArg(args[1:], "-m", "--method")), "put")
+}
+
+// m6ShadowOrderConfArgs 复制 namesrv/topic 并生成指定 method 的 updateOrderConf 参数。
+func m6ShadowOrderConfArgs(args []string, method string, value string) ([]string, bool) {
+	topic := strings.TrimSpace(cliStringArg(args[1:], "-t", "--topic"))
+	if topic == "" {
+		return nil, false
+	}
+	orderArgs := []string{"updateOrderConf"}
+	if nameServers := strings.TrimSpace(cliStringArg(args[1:], "-n", "--namesrvAddr")); nameServers != "" {
+		orderArgs = append(orderArgs, "-n", nameServers)
+	}
+	orderArgs = append(orderArgs, "-m", method, "-t", topic)
+	if value != "" {
+		orderArgs = append(orderArgs, "-v", value)
+	}
+	return orderArgs, true
 }
 
 // m6ShadowKVBeforeRun 为 deleteKvConfig 样本预置同一 namespace/key，确保每路 provider 都删除真实存在的 KV。
@@ -1885,11 +2286,76 @@ func runM6ShadowCommand(ctx context.Context, options Options, args []string) (na
 	output, err := runCommand(ctx, options, commandArgs)
 	shadowOutput := nativeadmin.ShadowOutput{Stdout: output}
 	if err != nil {
+		var officialResult *nativeadmin.OfficialCommandResult
+		if errors.As(err, &officialResult) {
+			if shadowOutput, shadowErr, ok := m6ShadowOfficialFailure(commandArgs, officialResult); ok {
+				return shadowOutput, shadowErr
+			}
+			return nativeadmin.ShadowOutput{
+				Stdout: officialResult.Stdout,
+				Stderr: officialResult.Stderr,
+			}, nil
+		}
+		if shadowOutput, ok := m6ShadowOfficialSuccessStderr(commandArgs, err); ok {
+			return shadowOutput, nil
+		}
 		return shadowOutput, err
 	}
 	artifacts, artifactErr := m6ShadowArtifacts(commandArgs)
 	shadowOutput.Artifacts = artifacts
 	return shadowOutput, artifactErr
+}
+
+// m6ShadowOfficialFailure 将官方零退出异常栈压缩成 primary provider 的摘要错误，仅用于 M6 对比账本。
+func m6ShadowOfficialFailure(args []string, result *nativeadmin.OfficialCommandResult) (nativeadmin.ShadowOutput, error, bool) {
+	if result == nil || len(args) == 0 {
+		return nativeadmin.ShadowOutput{}, nil, false
+	}
+	if !strings.EqualFold(strings.TrimSpace(args[0]), "queryMsgTraceById") {
+		return nativeadmin.ShadowOutput{}, nil, false
+	}
+	stderr := result.Stderr
+	if !strings.Contains(stderr, "SubCommandException") || !strings.Contains(stderr, "Caused by:") {
+		return nativeadmin.ShadowOutput{}, nil, false
+	}
+	summary := m6ShadowOfficialFailureSummary(stderr)
+	if summary == "" {
+		return nativeadmin.ShadowOutput{}, nil, false
+	}
+	return nativeadmin.ShadowOutput{}, errors.New("mqadmin 命令输出异常: " + summary), true
+}
+
+// m6ShadowOfficialFailureSummary 复用官方 provider 的首要异常行提取规则，保持 shadow error 字段与 primary 一致。
+func m6ShadowOfficialFailureSummary(output string) string {
+	for _, raw := range strings.Split(output, "\n") {
+		line := strings.TrimSpace(raw)
+		if line == "" {
+			continue
+		}
+		if strings.Contains(line, "SubCommandException") || strings.Contains(line, "Caused by:") || strings.Contains(line, "RemotingTimeoutException") {
+			return line
+		}
+	}
+	return ""
+}
+
+func m6ShadowOfficialSuccessStderr(args []string, err error) (nativeadmin.ShadowOutput, bool) {
+	if err == nil || len(args) == 0 {
+		return nativeadmin.ShadowOutput{}, false
+	}
+	if !strings.EqualFold(strings.TrimSpace(args[0]), "getBrokerEpoch") {
+		return nativeadmin.ShadowOutput{}, false
+	}
+	if strings.TrimSpace(cliStringArg(args[1:], "-c", "--clusterName")) == "" {
+		return nativeadmin.ShadowOutput{}, false
+	}
+	errText := err.Error()
+	if !strings.Contains(errText, "mqadmin 命令输出异常: org.apache.rocketmq.tools.command.SubCommandException: GetBrokerEpochSubCommand command failed") {
+		return nativeadmin.ShadowOutput{}, false
+	}
+	return nativeadmin.ShadowOutput{
+		Stderr: nativeadmin.OfficialGetBrokerEpochControllerModeStderr("this request only for controllerMode "),
+	}, true
 }
 
 func shadowOutputForParserError(output string, err error) nativeadmin.ShadowOutput {
@@ -2068,6 +2534,10 @@ func skipsDefaultNameServer(args []string) bool {
 	if strings.EqualFold(args[0], "addBroker") || strings.EqualFold(args[0], "removeBroker") {
 		return true
 	}
+	// 官方 topicRoute/topicClusterList 未传 -n 时会进入 remoting 并写出 connect null 堆栈；不能替用户补默认 NameServer。
+	if strings.EqualFold(args[0], "topicRoute") || strings.EqualFold(args[0], "topicClusterList") {
+		return true
+	}
 	// rocksDBConfigToJson 本地模式由官方按 -p 读取本机 RocksDB；注入 -n 会把官方切到 RPC 分支并触发 Invalid args。
 	if strings.EqualFold(args[0], "rocksDBConfigToJson") && hasFlagValue(args[1:], "-p", "--configPath") {
 		return true
@@ -2100,11 +2570,18 @@ func runCommand(ctx context.Context, options Options, args []string) (string, er
 	if options.Runner != nil {
 		return options.Runner.Run(ctx, args...)
 	}
+	if officialResult, ok := officialMissingNameServerTopicResult(args); ok {
+		return "", officialResult
+	}
 	if options.Transport == "native" || options.Transport == "auto" {
 		output, supported, err := nativeCommandRunner(ctx, args, options.Timeout)
 		if supported {
 			if err == nil {
 				return output, nil
+			}
+			var officialResult *nativeadmin.OfficialCommandResult
+			if errors.As(err, &officialResult) {
+				return output, err
 			}
 			if options.Transport == "native" {
 				return output, err
@@ -2137,6 +2614,23 @@ func runCommand(ctx context.Context, options Options, args []string) (string, er
 		return "", fmt.Errorf("unknown transport %q", options.Transport)
 	}
 	return provider.RunCommand(ctx, args...)
+}
+
+func officialMissingNameServerTopicResult(args []string) (*nativeadmin.OfficialCommandResult, bool) {
+	if len(args) == 0 || hasNameServerArg(args) {
+		return nil, false
+	}
+	if strings.TrimSpace(cliStringArg(args[1:], "-t", "--topic")) == "" {
+		return nil, false
+	}
+	switch {
+	case strings.EqualFold(args[0], "topicRoute"):
+		return &nativeadmin.OfficialCommandResult{ExitCode: 0, Stderr: nativeadmin.OfficialTopicRouteMissingNameServerStderr()}, true
+	case strings.EqualFold(args[0], "topicClusterList"):
+		return &nativeadmin.OfficialCommandResult{ExitCode: 0, Stderr: nativeadmin.OfficialTopicClusterListMissingNameServerStderr()}, true
+	default:
+		return nil, false
+	}
 }
 
 func commandName(args []string) string {

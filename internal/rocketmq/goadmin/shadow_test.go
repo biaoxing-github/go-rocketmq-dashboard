@@ -199,10 +199,12 @@ func TestRunShadowCompareNormalizesBrokerStatusDynamicStdoutByCommand(t *testing
 	officialStdout := "putTps                          : 1.0 2.0 3.0\n" +
 		"runtime                         : 120 seconds\n" +
 		"timerReadBehind                 : 1\n" +
+		"commitLogDirCapacity            : Total : 1006.9 GiB, Free : 800.0 GiB.\n" +
 		"brokerVersionDesc               : V5_3_2\n"
 	nativeStdout := "putTps                          : 9.0 8.0 7.0\n" +
 		"runtime                         : 121 seconds\n" +
 		"timerReadBehind                 : 0\n" +
+		"commitLogDirCapacity            : Total : 1006.9 GiB, Free : 799.9 GiB.\n" +
 		"brokerVersionDesc               : V5_3_2\n"
 
 	result := RunShadowCompare(context.Background(), []string{"brokerStatus", "-b", "127.0.0.1:10911"}, ShadowTarget{
@@ -232,6 +234,41 @@ func TestRunShadowCompareDoesNotNormalizeBrokerStatusDynamicStdoutForOtherComman
 
 	if len(result.Diffs) != 1 || result.Diffs[0].Matched || !result.Diffs[0].StdoutDifferent {
 		t.Fatalf("expected non-brokerStatus command to preserve stdout difference, got %#v", result.Diffs)
+	}
+}
+
+func TestRunShadowCompareNormalizesClusterListTimerProgressByCommand(t *testing.T) {
+	header := "#Cluster Name           #Broker Name            #BID  #Addr                  #Version              #InTPS(LOAD)                   #OutTPS(LOAD)  #Timer(Progress)        #PCWait(ms)  #Hour         #SPACE    #ACTIVATED\n"
+	officialStdout := header + "DefaultCluster          broker-a                0     127.0.0.1:10911       V5_3_2                 0.00(0,0ms)               0.00(0,0ms|0,0ms)  1-0(0.0w, 0.0, 0.0)               0  252.04        0.2100          true\n"
+	nativeStdout := header + "DefaultCluster          broker-a                0     127.0.0.1:10911       V5_3_2                 0.00(0,0ms)               0.00(0,0ms|0,0ms)  0-0(0.0w, 0.0, 0.0)               0  252.05        0.2100          true\n"
+
+	result := RunShadowCompare(context.Background(), []string{"clusterList", "-n", "127.0.0.1:9876"}, ShadowTarget{
+		Name:   "official",
+		Runner: fixedShadowRunner(officialStdout, "", nil),
+	}, []ShadowTarget{{
+		Name:   "native",
+		Runner: fixedShadowRunner(nativeStdout, "", nil),
+	}}, DefaultM6ShadowNormalizer())
+
+	if len(result.Diffs) != 1 || !result.Diffs[0].Matched {
+		t.Fatalf("expected clusterList runtime Timer(Progress) and Hour values to normalize by command, got %#v", result.Diffs)
+	}
+}
+
+func TestRunShadowCompareDoesNotNormalizeClusterListTimerProgressForOtherCommands(t *testing.T) {
+	officialStdout := "DefaultCluster  1-0(0.0w, 0.0, 0.0)\n"
+	nativeStdout := "DefaultCluster  0-0(0.0w, 0.0, 0.0)\n"
+
+	result := RunShadowCompare(context.Background(), []string{"topicList", "-n", "127.0.0.1:9876"}, ShadowTarget{
+		Name:   "official",
+		Runner: fixedShadowRunner(officialStdout, "", nil),
+	}, []ShadowTarget{{
+		Name:   "native",
+		Runner: fixedShadowRunner(nativeStdout, "", nil),
+	}}, DefaultM6ShadowNormalizer())
+
+	if len(result.Diffs) != 1 || result.Diffs[0].Matched || !result.Diffs[0].StdoutDifferent {
+		t.Fatalf("expected non-clusterList command to preserve Timer(Progress) stdout difference, got %#v", result.Diffs)
 	}
 }
 

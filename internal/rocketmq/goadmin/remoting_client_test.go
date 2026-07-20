@@ -7794,6 +7794,56 @@ func TestRunNativeGetBrokerEpochClusterFormatsOfficialOutput(t *testing.T) {
 	}
 }
 
+func TestRunNativeGetBrokerEpochMissingBrokerMatchesOfficialEmptyOutput(t *testing.T) {
+	client := nativeClientFunc{
+		getBrokerEpoch: func(ctx context.Context, nameServer string, brokerName string) ([]brokerEpochResult, error) {
+			if nameServer != "127.0.0.1:9876" || brokerName != "missing-broker" {
+				t.Fatalf("unexpected getBrokerEpoch args namesrv=%s brokerName=%s", nameServer, brokerName)
+			}
+			return nil, nil
+		},
+	}
+	output, supported, err := runNativeCommand(context.Background(), []string{"getBrokerEpoch", "-n", "127.0.0.1:9876", "-b", "missing-broker"}, client)
+	if err != nil {
+		t.Fatalf("getBrokerEpoch missing broker should match official empty output: %v", err)
+	}
+	if !supported {
+		t.Fatalf("getBrokerEpoch missing broker should stay native-supported")
+	}
+	if output != "" {
+		t.Fatalf("expected official empty output for missing broker, got %q", output)
+	}
+}
+
+func TestRunNativeGetBrokerEpochClusterControllerModeErrorMatchesOfficialStderr(t *testing.T) {
+	officialStderr := officialGetBrokerEpochControllerModeStderr("this request only for controllerMode ")
+	client := nativeClientFunc{
+		getBrokerEpochByCluster: func(ctx context.Context, nameServer string, clusterName string) ([]brokerEpochResult, error) {
+			if nameServer != "127.0.0.1:9876" || clusterName != "DefaultCluster" {
+				t.Fatalf("unexpected getBrokerEpoch cluster args namesrv=%s cluster=%s", nameServer, clusterName)
+			}
+			return nil, &rocketMQResponseError{Code: 1, Remark: "this request only for controllerMode "}
+		},
+	}
+	output, supported, err := runNativeCommand(context.Background(), []string{"getBrokerEpoch", "-n", "127.0.0.1:9876", "-c", "DefaultCluster"}, client)
+	if !supported {
+		t.Fatalf("getBrokerEpoch cluster should stay native-supported")
+	}
+	var officialResult *OfficialCommandResult
+	if !errors.As(err, &officialResult) {
+		t.Fatalf("expected official command result error, got output=%q err=%T %v", output, err, err)
+	}
+	if officialResult.ExitCode != 0 {
+		t.Fatalf("expected official exit 0, got %d", officialResult.ExitCode)
+	}
+	if officialResult.Stdout != "" {
+		t.Fatalf("expected empty official stdout, got %q", officialResult.Stdout)
+	}
+	if officialResult.Stderr != officialStderr {
+		t.Fatalf("unexpected official stderr\nwant=%q\n got=%q", officialStderr, officialResult.Stderr)
+	}
+}
+
 func TestRunNativeGetBrokerEpochFallsBackForInterval(t *testing.T) {
 	for _, args := range [][]string{
 		{"getBrokerEpoch", "-n", "127.0.0.1:9876", "-b", "broker-a", "-i", "1"},
@@ -7942,6 +7992,48 @@ func TestClientGetBrokerEpochUsesOfficialRequestCode(t *testing.T) {
 	}}
 	if !reflect.DeepEqual(results, expected) {
 		t.Fatalf("unexpected epoch results\nexpected=%#v\nactual=%#v", expected, results)
+	}
+}
+
+func TestClientGetBrokerEpochMissingBrokerMatchesOfficialEmptyOutput(t *testing.T) {
+	nameServerListener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen nameserver: %v", err)
+	}
+	defer nameServerListener.Close()
+
+	nameServerDone := make(chan error, 1)
+	go func() {
+		conn, err := nameServerListener.Accept()
+		if err != nil {
+			nameServerDone <- err
+			return
+		}
+		defer conn.Close()
+		request, err := decodeCommand(conn)
+		if err != nil {
+			nameServerDone <- err
+			return
+		}
+		if request.Code != requestCodeGetBrokerClusterInfo {
+			nameServerDone <- fmt.Errorf("expected GET_BROKER_CLUSTER_INFO code %d, got %d", requestCodeGetBrokerClusterInfo, request.Code)
+			return
+		}
+		body := []byte(`{"brokerAddrTable":{"actual-broker":{"brokerAddrs":{"0":"127.0.0.1:10911"},"brokerName":"actual-broker","cluster":"DefaultCluster"}},"clusterAddrTable":{"DefaultCluster":["actual-broker"]}}`)
+		response := remotingCommand{Code: responseCodeSuccess, Language: "JAVA", Version: 0, Opaque: request.Opaque, Flag: 1}
+		_, err = conn.Write(remotingFrameForTest(t, response, body))
+		nameServerDone <- err
+	}()
+
+	results, err := NewClient(time.Second).GetBrokerEpoch(context.Background(), nameServerListener.Addr().String(), "missing-broker")
+	if err != nil {
+		t.Fatalf("missing getBrokerEpoch should match official empty output: %v", err)
+	}
+	if err := <-nameServerDone; err != nil {
+		t.Fatalf("nameserver side: %v", err)
+	}
+	if len(results) != 0 {
+		t.Fatalf("expected no epoch rows for missing broker, got %#v", results)
 	}
 }
 
@@ -11264,6 +11356,57 @@ func TestRunNativeTopicRouteRequiresTopic(t *testing.T) {
 	}
 }
 
+func TestRunNativeTopicRouteMissingNameServerMatchesOfficialStderr(t *testing.T) {
+	client := nativeClientFunc{
+		topicRoute: func(ctx context.Context, nameServer string, topic string) ([]byte, error) {
+			t.Fatalf("topicRoute should not dial remoting when official mqadmin has no namesrvAddr, namesrv=%s topic=%s", nameServer, topic)
+			return nil, nil
+		},
+	}
+
+	output, supported, err := runNativeCommand(context.Background(), []string{"topicRoute", "-t", "TopicTest"}, client)
+
+	assertOfficialZeroExitStderrForTest(t, output, supported, err, expectedOfficialTopicRouteMissingNameServerStderrForTest())
+}
+
+func assertOfficialZeroExitStderrForTest(t *testing.T, output string, supported bool, err error, expectedStderr string) {
+	t.Helper()
+	if !supported {
+		t.Fatalf("expected command to stay native-supported")
+	}
+	if output != "" {
+		t.Fatalf("expected empty stdout, got %q", output)
+	}
+	var officialResult *OfficialCommandResult
+	if !errors.As(err, &officialResult) {
+		t.Fatalf("expected official command result error, got %T %v", err, err)
+	}
+	if officialResult.ExitCode != 0 {
+		t.Fatalf("expected official exit 0, got %d", officialResult.ExitCode)
+	}
+	if officialResult.Stdout != "" {
+		t.Fatalf("expected empty official stdout, got %q", officialResult.Stdout)
+	}
+	if officialResult.Stderr != expectedStderr {
+		t.Fatalf("unexpected official stderr\nwant=%q\n got=%q", expectedStderr, officialResult.Stderr)
+	}
+}
+
+func expectedOfficialTopicRouteMissingNameServerStderrForTest() string {
+	return "org.apache.rocketmq.tools.command.SubCommandException: TopicRouteSubCommand command failed\n" +
+		"\tat org.apache.rocketmq.tools.command.topic.TopicRouteSubCommand.execute(TopicRouteSubCommand.java:74)\n" +
+		"\tat org.apache.rocketmq.tools.command.MQAdminStartup.main0(MQAdminStartup.java:181)\n" +
+		"\tat org.apache.rocketmq.tools.command.MQAdminStartup.main(MQAdminStartup.java:131)\n" +
+		"Caused by: org.apache.rocketmq.remoting.exception.RemotingConnectException: connect to null failed\n" +
+		"\tat org.apache.rocketmq.remoting.netty.NettyRemotingClient.invokeSync(NettyRemotingClient.java:584)\n" +
+		"\tat org.apache.rocketmq.client.impl.MQClientAPIImpl.getTopicRouteInfoFromNameServer(MQClientAPIImpl.java:2090)\n" +
+		"\tat org.apache.rocketmq.client.impl.MQClientAPIImpl.getTopicRouteInfoFromNameServer(MQClientAPIImpl.java:2081)\n" +
+		"\tat org.apache.rocketmq.tools.admin.DefaultMQAdminExtImpl.examineTopicRouteInfo(DefaultMQAdminExtImpl.java:602)\n" +
+		"\tat org.apache.rocketmq.tools.admin.DefaultMQAdminExt.examineTopicRouteInfo(DefaultMQAdminExt.java:346)\n" +
+		"\tat org.apache.rocketmq.tools.command.topic.TopicRouteSubCommand.execute(TopicRouteSubCommand.java:71)\n" +
+		"\t... 2 more\n"
+}
+
 func TestRunNativeTopicStatusFormatsOfficialTable(t *testing.T) {
 	client := nativeClientFunc{
 		topicStatus: func(ctx context.Context, nameServer string, topic string) ([]topicStatusEntry, error) {
@@ -11378,6 +11521,34 @@ func TestRunNativeTopicClusterListRequiresTopic(t *testing.T) {
 	if !supported || output != "" {
 		t.Fatalf("expected topicClusterList missing topic to be handled by native command, supported=%t output=%q", supported, output)
 	}
+}
+
+func TestRunNativeTopicClusterListMissingNameServerMatchesOfficialStderr(t *testing.T) {
+	client := nativeClientFunc{
+		topicClusterList: func(ctx context.Context, nameServer string, topic string) ([]string, error) {
+			t.Fatalf("topicClusterList should not dial remoting when official mqadmin has no namesrvAddr, namesrv=%s topic=%s", nameServer, topic)
+			return nil, nil
+		},
+	}
+
+	output, supported, err := runNativeCommand(context.Background(), []string{"topicClusterList", "-t", "TopicTest"}, client)
+
+	assertOfficialZeroExitStderrForTest(t, output, supported, err, expectedOfficialTopicClusterListMissingNameServerStderrForTest())
+}
+
+func expectedOfficialTopicClusterListMissingNameServerStderrForTest() string {
+	return "org.apache.rocketmq.tools.command.SubCommandException: TopicClusterSubCommand command failed\n" +
+		"\tat org.apache.rocketmq.tools.command.topic.TopicClusterSubCommand.execute(TopicClusterSubCommand.java:61)\n" +
+		"\tat org.apache.rocketmq.tools.command.MQAdminStartup.main0(MQAdminStartup.java:181)\n" +
+		"\tat org.apache.rocketmq.tools.command.MQAdminStartup.main(MQAdminStartup.java:131)\n" +
+		"Caused by: org.apache.rocketmq.remoting.exception.RemotingConnectException: connect to null failed\n" +
+		"\tat org.apache.rocketmq.remoting.netty.NettyRemotingClient.invokeSync(NettyRemotingClient.java:584)\n" +
+		"\tat org.apache.rocketmq.client.impl.MQClientAPIImpl.getBrokerClusterInfo(MQClientAPIImpl.java:2060)\n" +
+		"\tat org.apache.rocketmq.tools.admin.DefaultMQAdminExtImpl.examineBrokerClusterInfo(DefaultMQAdminExtImpl.java:596)\n" +
+		"\tat org.apache.rocketmq.tools.admin.DefaultMQAdminExtImpl.getTopicClusterList(DefaultMQAdminExtImpl.java:1655)\n" +
+		"\tat org.apache.rocketmq.tools.admin.DefaultMQAdminExt.getTopicClusterList(DefaultMQAdminExt.java:683)\n" +
+		"\tat org.apache.rocketmq.tools.command.topic.TopicClusterSubCommand.execute(TopicClusterSubCommand.java:56)\n" +
+		"\t... 2 more\n"
 }
 
 func TestRunNativeConsumerProgressFormatsOfficialGroupTable(t *testing.T) {
@@ -13213,6 +13384,41 @@ func TestRunNativeQueryMsgTraceByIdFormatsOfficialTrace(t *testing.T) {
 	if output != expected {
 		t.Fatalf("queryMsgTraceById output mismatch\nexpected:\n%s\nactual:\n%s", expected, output)
 	}
+}
+
+func TestRunNativeQueryMsgTraceByIdNoMessageMatchesOfficialStderr(t *testing.T) {
+	client := nativeClientFunc{
+		queryMessageTraceByID: func(ctx context.Context, nameServer string, traceTopic string, msgID string, beginTimestamp int64, endTimestamp int64, maxNum int) ([]messageTraceView, error) {
+			if nameServer != "127.0.0.1:9876" || traceTopic != defaultTraceTopic || msgID != "MISSING-TRACE" || beginTimestamp != 0 || endTimestamp != defaultQueryMessageEndTimestamp || maxNum != 64 {
+				t.Fatalf("unexpected trace args namesrv=%s topic=%s msgID=%s begin=%d end=%d max=%d", nameServer, traceTopic, msgID, beginTimestamp, endTimestamp, maxNum)
+			}
+			return nil, nil
+		},
+	}
+
+	output, supported, err := runNativeCommand(context.Background(), []string{
+		"queryMsgTraceById",
+		"-n", "127.0.0.1:9876",
+		"-i", "MISSING-TRACE",
+	}, client)
+
+	assertOfficialZeroExitStderrForTest(t, output, supported, err, expectedOfficialQueryMsgTraceByIdNoMessageStderrForTest())
+}
+
+func expectedOfficialQueryMsgTraceByIdNoMessageStderrForTest() string {
+	return "org.apache.rocketmq.tools.command.SubCommandException: QueryMsgTraceByIdSubCommandcommand failed\n" +
+		"\tat org.apache.rocketmq.tools.command.message.QueryMsgTraceByIdSubCommand.execute(QueryMsgTraceByIdSubCommand.java:110)\n" +
+		"\tat org.apache.rocketmq.tools.command.MQAdminStartup.main0(MQAdminStartup.java:181)\n" +
+		"\tat org.apache.rocketmq.tools.command.MQAdminStartup.main(MQAdminStartup.java:131)\n" +
+		"Caused by: org.apache.rocketmq.client.exception.MQClientException: CODE: 208  DESC: query message by key finished, but no message.\n" +
+		"For more information, please visit the url, https://rocketmq.apache.org/docs/bestPractice/06FAQ\n" +
+		"\tat org.apache.rocketmq.client.impl.MQAdminImpl.queryMessage(MQAdminImpl.java:482)\n" +
+		"\tat org.apache.rocketmq.client.impl.MQAdminImpl.queryMessage(MQAdminImpl.java:282)\n" +
+		"\tat org.apache.rocketmq.tools.admin.DefaultMQAdminExtImpl.queryMessage(DefaultMQAdminExtImpl.java:1765)\n" +
+		"\tat org.apache.rocketmq.tools.admin.DefaultMQAdminExt.queryMessage(DefaultMQAdminExt.java:155)\n" +
+		"\tat org.apache.rocketmq.tools.command.message.QueryMsgTraceByIdSubCommand.queryTraceByMsgId(QueryMsgTraceByIdSubCommand.java:120)\n" +
+		"\tat org.apache.rocketmq.tools.command.message.QueryMsgTraceByIdSubCommand.execute(QueryMsgTraceByIdSubCommand.java:108)\n" +
+		"\t... 2 more\n"
 }
 
 func TestDecodeQueryMessageBodyParsesRocketMQRecord(t *testing.T) {
