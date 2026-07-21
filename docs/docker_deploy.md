@@ -106,6 +106,9 @@ docker compose logs -f rocketmq-dashboard
 | `RMQD_ADMIN_SIDECAR_CLASSPATH` | `/app/rocketmq-admin-sidecar:/opt/rocketmq/lib/*` | sidecar classpath |
 | `RMQD_ADMIN_SIDECAR_MAIN_CLASS` | `dev.codex.rocketmq.AdminSidecar` | sidecar Java 主类 |
 | `RMQD_ADMIN_SIDECAR_TIMEOUT_MS` | `3000` | Go 调用 sidecar 的 HTTP 超时时间 |
+| `RMQD_PROXY_EXTERNAL_HOST` | `127.0.0.1` | 页面展示的 Proxy 对外宿主机或域名，不包含协议和端口 |
+| `RMQD_PROXY_GRPC_HOST_PORT` | `18081` | Proxy gRPC 的宿主机映射端口，同时用于页面展示 |
+| `RMQD_PROXY_REMOTING_HOST_PORT` | `18080` | Proxy Remoting 的宿主机映射端口，同时用于页面展示 |
 
 | 构建变量 | 默认值 | 说明 |
 | --- | --- | --- |

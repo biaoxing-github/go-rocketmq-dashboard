@@ -75,6 +75,9 @@ func TestLoadReadsRuntimeConfigAndProxySettings(t *testing.T) {
 	t.Setenv("RMQD_RUNTIME_CONFIG_ENABLED", "true")
 	t.Setenv("RMQD_PROXY_RUNTIME_DIR", "D:/tmp/rocketmq-proxy")
 	t.Setenv("RMQD_PROXY_ROCKETMQ_HOME", "/srv/rocketmq")
+	t.Setenv("RMQD_PROXY_EXTERNAL_HOST", "172.168.1.93")
+	t.Setenv("RMQD_PROXY_GRPC_HOST_PORT", "18085")
+	t.Setenv("RMQD_PROXY_REMOTING_HOST_PORT", "18080")
 	t.Setenv("RMQD_PROXY_HEAP_MB", "768")
 	t.Setenv("RMQD_PROXY_START_TIMEOUT_MS", "45000")
 	t.Setenv("RMQD_PROXY_STOP_TIMEOUT_MS", "12000")
@@ -85,6 +88,9 @@ func TestLoadReadsRuntimeConfigAndProxySettings(t *testing.T) {
 	}
 	if cfg.ProxyRuntimeDir != "D:/tmp/rocketmq-proxy" || cfg.ProxyRocketMQHome != "/srv/rocketmq" {
 		t.Fatalf("unexpected proxy paths: dir=%q home=%q", cfg.ProxyRuntimeDir, cfg.ProxyRocketMQHome)
+	}
+	if cfg.ProxyExternalHost != "172.168.1.93" || cfg.ProxyGRPCHostPort != 18085 || cfg.ProxyRemotingHostPort != 18080 {
+		t.Fatalf("unexpected proxy external endpoint: host=%q grpc=%d remoting=%d", cfg.ProxyExternalHost, cfg.ProxyGRPCHostPort, cfg.ProxyRemotingHostPort)
 	}
 	if cfg.ProxyHeapMB != 768 || cfg.ProxyStartTimeout != 45*time.Second || cfg.ProxyStopTimeout != 12*time.Second {
 		t.Fatalf("unexpected proxy runtime limits: heap=%d start=%s stop=%s", cfg.ProxyHeapMB, cfg.ProxyStartTimeout, cfg.ProxyStopTimeout)

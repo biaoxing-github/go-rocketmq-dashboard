@@ -29,6 +29,12 @@ type ProxyRuntimeOptions struct {
 	RocketMQHome string
 	// NameServer 用于生成首次打开面板时的默认 Proxy 配置。
 	NameServer string
+	// ExternalHost 是客户端访问 Proxy 时使用的宿主机或域名。
+	ExternalHost string
+	// ExternalGRPCPort 是 gRPC 监听端口映射到宿主机后的对外端口。
+	ExternalGRPCPort int
+	// ExternalRemotingPort 是 Remoting 监听端口映射到宿主机后的对外端口。
+	ExternalRemotingPort int
 	// HeapMB 是 Proxy Java 进程的最小和最大堆大小。
 	HeapMB int
 	// StartTimeout 是启动后等待 gRPC 端口就绪的最长时间。
@@ -153,18 +159,20 @@ func (m *ProxyRuntimeManager) Snapshot() ProxyRuntimeSnapshot {
 		}
 	}
 	return ProxyRuntimeSnapshot{
-		Available:          m.available() == nil,
-		Enabled:            state.Enabled,
-		Running:            running,
-		Healthy:            healthy,
-		Status:             status,
-		PID:                pid,
-		GrpcEndpoint:       fmt.Sprintf("0.0.0.0:%d", proxySettingInt(state.Settings, "grpcServerPort")),
-		RemotingEndpoint:   fmt.Sprintf("0.0.0.0:%d", proxySettingInt(state.Settings, "remotingListenPort")),
-		StartedAtUnixMilli: startedAt,
-		RestartCount:       restarts,
-		LastError:          lastError,
-		Fields:             proxyRuntimeFields(state.Settings),
+		Available:                m.available() == nil,
+		Enabled:                  state.Enabled,
+		Running:                  running,
+		Healthy:                  healthy,
+		Status:                   status,
+		PID:                      pid,
+		GrpcEndpoint:             fmt.Sprintf("0.0.0.0:%d", proxySettingInt(state.Settings, "grpcServerPort")),
+		RemotingEndpoint:         fmt.Sprintf("0.0.0.0:%d", proxySettingInt(state.Settings, "remotingListenPort")),
+		GrpcExternalEndpoint:     proxyExternalEndpoint(m.options.ExternalHost, m.options.ExternalGRPCPort),
+		RemotingExternalEndpoint: proxyExternalEndpoint(m.options.ExternalHost, m.options.ExternalRemotingPort),
+		StartedAtUnixMilli:       startedAt,
+		RestartCount:             restarts,
+		LastError:                lastError,
+		Fields:                   proxyRuntimeFields(state.Settings),
 	}
 }
 
@@ -518,6 +526,16 @@ func normalizeProxyRuntimeOptions(options ProxyRuntimeOptions) ProxyRuntimeOptio
 	if strings.TrimSpace(options.RocketMQHome) == "" {
 		options.RocketMQHome = "/opt/rocketmq"
 	}
+	options.ExternalHost = strings.TrimSpace(options.ExternalHost)
+	if options.ExternalHost == "" {
+		options.ExternalHost = "127.0.0.1"
+	}
+	if options.ExternalGRPCPort <= 0 {
+		options.ExternalGRPCPort = 8081
+	}
+	if options.ExternalRemotingPort <= 0 {
+		options.ExternalRemotingPort = 8080
+	}
 	if options.HeapMB <= 0 {
 		options.HeapMB = 512
 	}
@@ -823,6 +841,15 @@ func proxyPortHealthy(port int, timeout time.Duration) bool {
 	}
 	_ = connection.Close()
 	return true
+}
+
+// proxyExternalEndpoint 组合部署宿主机和映射端口，供页面直接展示客户端连接地址。
+func proxyExternalEndpoint(host string, port int) string {
+	host = strings.TrimSpace(host)
+	if host == "" || port <= 0 {
+		return ""
+	}
+	return net.JoinHostPort(strings.Trim(host, "[]"), strconv.Itoa(port))
 }
 
 // statePath 返回持久化状态文件路径。

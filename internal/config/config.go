@@ -35,6 +35,12 @@ type Config struct {
 	ProxyRuntimeDir string
 	// ProxyRocketMQHome 指向包含官方 Proxy 依赖的 RocketMQ 二进制目录。
 	ProxyRocketMQHome string
+	// ProxyExternalHost 是客户端访问 Proxy 时使用的宿主机或域名，不包含协议和端口。
+	ProxyExternalHost string
+	// ProxyGRPCHostPort 是容器 gRPC 端口映射到宿主机后的对外端口。
+	ProxyGRPCHostPort int
+	// ProxyRemotingHostPort 是容器 Remoting 端口映射到宿主机后的对外端口。
+	ProxyRemotingHostPort int
 	// ProxyHeapMB 控制 Proxy Java 进程堆大小。
 	ProxyHeapMB int
 	// ProxyStartTimeout 是等待 gRPC 端口启动的最长时间。
@@ -70,6 +76,9 @@ func Load() Config {
 		RuntimeConfigEnabled:  boolFromEnv("RMQD_RUNTIME_CONFIG_ENABLED", false),
 		ProxyRuntimeDir:       getenv("RMQD_PROXY_RUNTIME_DIR", defaultProxyRuntimeDir()),
 		ProxyRocketMQHome:     getenv("RMQD_PROXY_ROCKETMQ_HOME", getenv("ROCKETMQ_HOME", "/opt/rocketmq")),
+		ProxyExternalHost:     strings.TrimSpace(getenv("RMQD_PROXY_EXTERNAL_HOST", "127.0.0.1")),
+		ProxyGRPCHostPort:     positiveIntFromEnv("RMQD_PROXY_GRPC_HOST_PORT", 8081),
+		ProxyRemotingHostPort: positiveIntFromEnv("RMQD_PROXY_REMOTING_HOST_PORT", 8080),
 		ProxyHeapMB:           positiveIntFromEnv("RMQD_PROXY_HEAP_MB", 512),
 		ProxyStartTimeout:     durationFromMillis("RMQD_PROXY_START_TIMEOUT_MS", 30000),
 		ProxyStopTimeout:      durationFromMillis("RMQD_PROXY_STOP_TIMEOUT_MS", 30000),

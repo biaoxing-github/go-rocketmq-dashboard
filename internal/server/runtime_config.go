@@ -143,6 +143,10 @@ type ProxyRuntimeSnapshot struct {
 	GrpcEndpoint string `json:"grpcEndpoint"`
 	// RemotingEndpoint 是容器内 Remoting 兼容监听地址。
 	RemotingEndpoint string `json:"remotingEndpoint"`
+	// GrpcExternalEndpoint 是客户端访问 gRPC Proxy 时使用的宿主机映射地址。
+	GrpcExternalEndpoint string `json:"grpcExternalEndpoint"`
+	// RemotingExternalEndpoint 是客户端访问 Remoting Proxy 时使用的宿主机映射地址。
+	RemotingExternalEndpoint string `json:"remotingExternalEndpoint"`
 	// StartedAtUnixMilli 是最近一次成功启动时间。
 	StartedAtUnixMilli int64 `json:"startedAtUnixMilli"`
 	// RestartCount 是当前 Dashboard 进程内成功启动 Proxy 的次数。

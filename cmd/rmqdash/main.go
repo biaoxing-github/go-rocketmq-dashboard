@@ -48,13 +48,16 @@ func main() {
 	}
 
 	proxyRuntimeManager, proxyRuntimeErr := server.NewProxyRuntimeManager(server.ProxyRuntimeOptions{
-		RuntimeDir:   cfg.ProxyRuntimeDir,
-		JavaPath:     cfg.JavaPath,
-		RocketMQHome: cfg.ProxyRocketMQHome,
-		NameServer:   cfg.NameServer,
-		HeapMB:       cfg.ProxyHeapMB,
-		StartTimeout: cfg.ProxyStartTimeout,
-		StopTimeout:  cfg.ProxyStopTimeout,
+		RuntimeDir:           cfg.ProxyRuntimeDir,
+		JavaPath:             cfg.JavaPath,
+		RocketMQHome:         cfg.ProxyRocketMQHome,
+		NameServer:           cfg.NameServer,
+		ExternalHost:         cfg.ProxyExternalHost,
+		ExternalGRPCPort:     cfg.ProxyGRPCHostPort,
+		ExternalRemotingPort: cfg.ProxyRemotingHostPort,
+		HeapMB:               cfg.ProxyHeapMB,
+		StartTimeout:         cfg.ProxyStartTimeout,
+		StopTimeout:          cfg.ProxyStopTimeout,
 	})
 	if proxyRuntimeErr != nil {
 		log.Printf("RocketMQ Proxy runtime unavailable: %v", proxyRuntimeErr)

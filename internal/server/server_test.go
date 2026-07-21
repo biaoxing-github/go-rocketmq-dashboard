@@ -154,6 +154,12 @@ func TestPublicAppRendersEditableRuntimeConfigControls(t *testing.T) {
 		"handleProxyRuntimeRestart",
 		"handleProxyRuntimeFieldChange",
 		"data-proxy-switch-state",
+		"grpcExternalEndpoint",
+		"remotingExternalEndpoint",
+		"对外 gRPC",
+		"对外 Remoting",
+		"容器 gRPC",
+		"容器 Remoting",
 	} {
 		if !strings.Contains(source, expected) {
 			t.Fatalf("public/app.js should include editable runtime config contract %q", expected)

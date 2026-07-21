@@ -751,8 +751,10 @@ function renderRuntimeConfig(payload) {
   $("#proxyRuntimeSummary").innerHTML = `
     <div><span>gRPC Proxy</span><strong>${escapeHTML(proxy.enabled ? "开启" : "关闭")}</strong></div>
     <div><span>进程</span><strong><span class="pill ${proxyRuntimePillClass(proxy.status)}">${escapeHTML(proxyRuntimeStatusText(proxy.status))}</span></strong></div>
-    <div><span>gRPC</span><strong class="mono">${escapeHTML(proxy.grpcEndpoint || "-")}</strong></div>
-    <div><span>Remoting</span><strong class="mono">${escapeHTML(proxy.remotingEndpoint || "-")}</strong></div>
+    <div><span>对外 gRPC</span><strong class="mono runtime-endpoint-external">${escapeHTML(proxy.grpcExternalEndpoint || "-")}</strong></div>
+    <div><span>对外 Remoting</span><strong class="mono runtime-endpoint-external">${escapeHTML(proxy.remotingExternalEndpoint || "-")}</strong></div>
+    <div><span>容器 gRPC</span><strong class="mono">${escapeHTML(proxy.grpcEndpoint || "-")}</strong></div>
+    <div><span>容器 Remoting</span><strong class="mono">${escapeHTML(proxy.remotingEndpoint || "-")}</strong></div>
     <div><span>PID</span><strong>${escapeHTML(proxy.pid || "-")}</strong></div>
     <div><span>重启次数</span><strong>${escapeHTML(proxy.restartCount || 0)}</strong></div>
   `;
@@ -845,7 +847,7 @@ async function handleProxyRuntimeSubmit(event) {
     state.runtimeConfig = { ...(state.runtimeConfig || {}), proxy: payload.data };
     renderRuntimeConfig({ data: state.runtimeConfig });
     $("#runtimeConfigNotice").textContent = payload.data?.enabled
-      ? `Proxy 已应用 · ${payload.data.grpcEndpoint || "gRPC"}`
+      ? `Proxy 已应用 · ${payload.data.grpcExternalEndpoint || payload.data.grpcEndpoint || "gRPC"}`
       : "Proxy 已关闭，配置已保存";
   } catch (error) {
     $("#runtimeConfigNotice").textContent = error.message;
@@ -888,7 +890,7 @@ async function handleProxyRuntimeRestart() {
     const payload = await fetchJSON("/api/runtime-config/proxy/restart", { method: "POST" });
     state.runtimeConfig = { ...(state.runtimeConfig || {}), proxy: payload.data };
     renderRuntimeConfig({ data: state.runtimeConfig });
-    $("#runtimeConfigNotice").textContent = `Proxy 已重启 · ${payload.data?.grpcEndpoint || "gRPC"}`;
+    $("#runtimeConfigNotice").textContent = `Proxy 已重启 · ${payload.data?.grpcExternalEndpoint || payload.data?.grpcEndpoint || "gRPC"}`;
   } catch (error) {
     $("#runtimeConfigNotice").textContent = error.message;
   } finally {

@@ -1935,7 +1935,12 @@ td {
 }
 
 .runtime-config-summary {
-  grid-template-columns: repeat(auto-fit, minmax(138px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+}
+
+.runtime-config-summary .runtime-endpoint-external {
+  color: var(--accent);
+  font-size: 15px;
 }
 
 .proxy-runtime-form,

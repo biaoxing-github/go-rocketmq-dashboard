@@ -233,12 +233,15 @@ func TestProxyRuntimeManagerPersistsDisabledConfigAndRejectsInvalidPorts(t *test
 		t.Fatal(err)
 	}
 	manager, err := NewProxyRuntimeManager(ProxyRuntimeOptions{
-		RuntimeDir:   runtimeDir,
-		JavaPath:     filepath.Join(runtimeDir, "missing-java"),
-		RocketMQHome: home,
-		NameServer:   "127.0.0.1:9876",
-		StartTimeout: 50 * time.Millisecond,
-		StopTimeout:  50 * time.Millisecond,
+		RuntimeDir:           runtimeDir,
+		JavaPath:             filepath.Join(runtimeDir, "missing-java"),
+		RocketMQHome:         home,
+		NameServer:           "127.0.0.1:9876",
+		ExternalHost:         "172.168.1.93",
+		ExternalGRPCPort:     18085,
+		ExternalRemotingPort: 18080,
+		StartTimeout:         50 * time.Millisecond,
+		StopTimeout:          50 * time.Millisecond,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -251,6 +254,9 @@ func TestProxyRuntimeManagerPersistsDisabledConfigAndRejectsInvalidPorts(t *test
 	}
 	if snapshot.Enabled || snapshot.Status != "disabled" || proxySettingInt(manager.currentState().Settings, "grpcServerPort") != 19081 {
 		t.Fatalf("unexpected disabled snapshot %#v", snapshot)
+	}
+	if snapshot.GrpcExternalEndpoint != "172.168.1.93:18085" || snapshot.RemotingExternalEndpoint != "172.168.1.93:18080" {
+		t.Fatalf("unexpected proxy external endpoints %#v", snapshot)
 	}
 	data, err := os.ReadFile(filepath.Join(runtimeDir, "proxy-state.json"))
 	if err != nil || !bytes.Contains(data, []byte(`"grpcServerPort": 19081`)) {
