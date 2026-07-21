@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
@@ -30,6 +31,68 @@ sample-order-events-consumer             1       V5_3_2                   PUSH  
 
 	if failure := mqadminCommandFailure(output); failure != "" {
 		t.Fatalf("expected mixed table output to stay parseable, got %s", failure)
+	}
+}
+
+func TestTopicListEnrichesAndCachesOfficialMessageTypes(t *testing.T) {
+	exportCalls := 0
+	runner := CommandRunnerFunc(func(ctx context.Context, args ...string) (string, error) {
+		switch args[0] {
+		case "topicList":
+			return "normal_topic\ntransaction_topic\n", nil
+		case "clusterList":
+			return `#Cluster Name           #Broker Name            #BID  #Addr                  #Version              #InTPS(LOAD)                   #OutTPS(LOAD)  #Timer(Progress)        #PCWait(ms)  #Hour         #SPACE    #ACTIVATED
+DefaultCluster          broker-a                0     127.0.0.1:10911     V5_2_0                 0.00(0,0ms)               0.00(0,0ms|N,Nms)  0-0(0.0w, 0.0, 0.0)               0  1446.72       0.1200          true`, nil
+		case "exportMetadata":
+			exportCalls++
+			targetDir := stringArgForTest(t, args, "-f")
+			if err := os.MkdirAll(targetDir, 0o755); err != nil {
+				return "", err
+			}
+			metadata := `{"topicConfigTable":{"normal_topic":{"attributes":{},"order":false,"topicName":"normal_topic"},"transaction_topic":{"attributes":{"message.type":"TRANSACTION"},"order":false,"topicName":"transaction_topic"}}}`
+			if err := os.WriteFile(filepath.Join(targetDir, "topic.json"), []byte(metadata), 0o600); err != nil {
+				return "", err
+			}
+			return "export topic.json success", nil
+		case "updateTopic":
+			return "create topic success", nil
+		default:
+			return "", errors.New("unexpected command: " + args[0])
+		}
+	})
+	provider := &MQAdminProvider{
+		NameServer:            "127.0.0.1:9876",
+		CommandRunner:         runner,
+		TopicMetadataCacheTTL: time.Hour,
+	}
+
+	for attempt := 0; attempt < 2; attempt++ {
+		topics, err := provider.TopicList(context.Background())
+		if err != nil {
+			t.Fatalf("TopicList returned error: %v", err)
+		}
+		if len(topics) != 2 || topics[0].MessageType != "NORMAL" || topics[1].MessageType != "TRANSACTION" {
+			t.Fatalf("unexpected enriched topics: %#v", topics)
+		}
+	}
+	if exportCalls != 1 {
+		t.Fatalf("expected one cached metadata export, got %d", exportCalls)
+	}
+	if _, err := provider.UpsertTopic(context.Background(), TopicConfigMutation{
+		Topic:          "transaction_topic",
+		ClusterName:    "DefaultCluster",
+		ReadQueueNums:  1,
+		WriteQueueNums: 1,
+		Perm:           6,
+		Attributes:     "+message.type=TRANSACTION",
+	}); err != nil {
+		t.Fatalf("UpsertTopic returned error: %v", err)
+	}
+	if _, err := provider.TopicList(context.Background()); err != nil {
+		t.Fatalf("TopicList after mutation returned error: %v", err)
+	}
+	if exportCalls != 2 {
+		t.Fatalf("expected Topic mutation to invalidate metadata cache, exports=%d", exportCalls)
 	}
 }
 

@@ -11,6 +11,13 @@ import (
 
 var unquotedNumericObjectKeyPattern = regexp.MustCompile(`([{\[,]\s*)(\d+)(\s*:)`)
 
+const (
+	transactionSysFlagMask     = 0x0C
+	transactionPreparedSysFlag = 0x04
+	transactionCommitSysFlag   = 0x08
+	transactionRollbackSysFlag = 0x0C
+)
+
 // ParseClusterList 将 mqadmin clusterList 文本解析成结构化集群数据。
 func ParseClusterList(output string) ([]Cluster, error) {
 	lines := strings.Split(output, "\n")
@@ -225,9 +232,44 @@ func ParseTopicList(output string) []Topic {
 			continue
 		}
 		seen[name] = true
-		topics = append(topics, Topic{Name: name, Kind: classifyTopic(name)})
+		topics = append(topics, Topic{Name: name, Kind: classifyTopic(name), MessageType: "UNKNOWN"})
 	}
 	return topics
+}
+
+// ParseTopicMessageTypes 解析 exportMetadata 生成的 topic.json，并返回 Topic 的官方 message.type。
+func ParseTopicMessageTypes(output string) (map[string]string, error) {
+	var metadata struct {
+		TopicConfigTable map[string]struct {
+			Attributes map[string]string `json:"attributes"`
+			Order      bool              `json:"order"`
+			TopicName  string            `json:"topicName"`
+		} `json:"topicConfigTable"`
+	}
+	if err := json.Unmarshal([]byte(output), &metadata); err != nil {
+		return nil, fmt.Errorf("解析 Topic 元数据失败: %w", err)
+	}
+
+	result := make(map[string]string, len(metadata.TopicConfigTable))
+	for tableName, config := range metadata.TopicConfigTable {
+		name := strings.TrimSpace(config.TopicName)
+		if name == "" {
+			name = strings.TrimSpace(tableName)
+		}
+		if name == "" {
+			continue
+		}
+		messageType := strings.ToUpper(strings.TrimSpace(config.Attributes["message.type"]))
+		if messageType == "" {
+			if config.Order {
+				messageType = "FIFO"
+			} else {
+				messageType = "NORMAL"
+			}
+		}
+		result[name] = messageType
+	}
+	return result, nil
 }
 
 // ParseTopicRoute 将 mqadmin topicRoute 默认 JSON 输出解析成前端可扫描的路由详情。
@@ -578,6 +620,13 @@ func ParseMessageDetail(output string) (MessageDetail, error) {
 	if err != nil {
 		return MessageDetail{}, fmt.Errorf("解析 Reconsume Times 失败: %w", err)
 	}
+	systemFlag := 0
+	if rawSystemFlag := strings.TrimSpace(values["System Flag"]); rawSystemFlag != "" {
+		systemFlag, err = parseInt(rawSystemFlag)
+		if err != nil {
+			return MessageDetail{}, fmt.Errorf("解析 System Flag 失败: %w", err)
+		}
+	}
 	properties := parseMessageProperties(values["Properties"])
 
 	return MessageDetail{
@@ -590,10 +639,60 @@ func ParseMessageDetail(output string) (MessageDetail, error) {
 		QueueID:        queueID,
 		QueueOffset:    queueOffset,
 		ReconsumeTimes: reconsumeTimes,
+		SystemFlag:     systemFlag,
+		Transaction:    buildTransactionMessageDetail(systemFlag, properties),
 		BornHost:       values["Born Host"],
 		StoreHost:      values["Store Host"],
 		BodyPreview:    truncateBody(values["Message Body"]),
 	}, nil
+}
+
+// buildTransactionMessageDetail 将 RocketMQ 事务系统位和消息属性合并为稳定的页面模型。
+func buildTransactionMessageDetail(systemFlag int, properties map[string]string) TransactionMessageDetail {
+	realQueueID, hasRealQueueID := parseMessagePropertyInt(properties, "REAL_QID")
+	checkTimes, hasCheckTimes := parseMessagePropertyInt(properties, "TRANSACTION_CHECK_TIMES")
+	transactionFlag := systemFlag & transactionSysFlagMask
+	enabled := strings.EqualFold(strings.TrimSpace(properties["TRAN_MSG"]), "true") ||
+		strings.TrimSpace(properties["__transactionId__"]) != "" || transactionFlag != 0
+
+	state := "NOT_TRANSACTION"
+	if enabled {
+		switch transactionFlag {
+		case transactionPreparedSysFlag:
+			state = "PREPARED"
+		case transactionCommitSysFlag:
+			state = "COMMITTED"
+		case transactionRollbackSysFlag:
+			state = "ROLLED_BACK"
+		default:
+			state = "UNKNOWN"
+		}
+	}
+
+	return TransactionMessageDetail{
+		Enabled:        enabled,
+		State:          state,
+		TransactionID:  strings.TrimSpace(properties["__transactionId__"]),
+		ProducerGroup:  strings.TrimSpace(properties["PGROUP"]),
+		RealTopic:      strings.TrimSpace(properties["REAL_TOPIC"]),
+		RealQueueID:    realQueueID,
+		HasRealQueueID: hasRealQueueID,
+		CheckTimes:     checkTimes,
+		HasCheckTimes:  hasCheckTimes,
+	}
+}
+
+// parseMessagePropertyInt 解析可选的整型消息属性，并保留字段是否存在的信息。
+func parseMessagePropertyInt(properties map[string]string, key string) (int, bool) {
+	raw := strings.TrimSpace(properties[key])
+	if raw == "" {
+		return 0, false
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, false
+	}
+	return value, true
 }
 
 func parseMessageProperties(raw string) map[string]string {

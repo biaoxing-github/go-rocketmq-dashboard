@@ -312,10 +312,11 @@ type NameServerConfigSnapshot struct {
 	Entries    []ConfigEntry `json:"entries"`
 }
 
-// Topic 表示 RocketMQ Topic 列表项，Kind 用于前端区分普通、重试、死信和系统 Topic。
+// Topic 表示 RocketMQ Topic 列表项，Kind 区分普通、重试、死信和系统 Topic，MessageType 表示官方 message.type 属性。
 type Topic struct {
-	Name string `json:"name"`
-	Kind string `json:"kind"`
+	Name        string `json:"name"`
+	Kind        string `json:"kind"`
+	MessageType string `json:"messageType"`
 }
 
 // TopicStatus 表示一个 Topic 当前每个队列的位点状态，来自 mqadmin topicStatus 输出。
@@ -437,6 +438,28 @@ type ConsumerProgressDetail struct {
 	InflightTotal int64                 `json:"inflightTotal"`
 }
 
+// TransactionMessageDetail 表示一条消息携带的 RocketMQ 事务元数据。
+type TransactionMessageDetail struct {
+	// Enabled 表示消息是否带有事务标记或事务系统位。
+	Enabled bool `json:"enabled"`
+	// State 是由 System Flag 解码出的 PREPARED、COMMITTED、ROLLED_BACK、UNKNOWN 或 NOT_TRANSACTION。
+	State string `json:"state"`
+	// TransactionID 是 RocketMQ 写入的事务标识 __transactionId__。
+	TransactionID string `json:"transactionId,omitempty"`
+	// ProducerGroup 是事务生产者组 PGROUP。
+	ProducerGroup string `json:"producerGroup,omitempty"`
+	// RealTopic 是半消息提交后投递的业务 Topic。
+	RealTopic string `json:"realTopic,omitempty"`
+	// RealQueueID 是半消息提交后投递的业务队列 ID。
+	RealQueueID int `json:"realQueueId"`
+	// HasRealQueueID 区分真实队列 0 和未返回 REAL_QID。
+	HasRealQueueID bool `json:"hasRealQueueId"`
+	// CheckTimes 是 Broker 已执行的事务状态回查次数。
+	CheckTimes int `json:"checkTimes"`
+	// HasCheckTimes 区分回查次数 0 和未返回 TRANSACTION_CHECK_TIMES。
+	HasCheckTimes bool `json:"hasCheckTimes"`
+}
+
 // MessageDetail 表示单条消息的基础元数据，后续由查询消息和轨迹查询共同填充。
 type MessageDetail struct {
 	MessageID string `json:"messageId"`
@@ -452,9 +475,13 @@ type MessageDetail struct {
 	QueueID        int    `json:"queueId"`
 	QueueOffset    int64  `json:"queueOffset"`
 	ReconsumeTimes int    `json:"reconsumeTimes"`
-	BornHost       string `json:"bornHost"`
-	StoreHost      string `json:"storeHost"`
-	BodyPreview    string `json:"bodyPreview"`
+	// SystemFlag 是 Broker 返回的消息系统标志，事务状态位位于 0x0C 掩码内。
+	SystemFlag int `json:"systemFlag"`
+	// Transaction 是从 System Flag 和事务属性中解码出的结构化状态。
+	Transaction TransactionMessageDetail `json:"transaction"`
+	BornHost    string                   `json:"bornHost"`
+	StoreHost   string                   `json:"storeHost"`
+	BodyPreview string                   `json:"bodyPreview"`
 }
 
 // MessageSearchResult 表示按 key 查询到的候选消息位置，详情页会继续按 messageId 回查完整消息。

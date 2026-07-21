@@ -50,11 +50,14 @@ type MQAdminProvider struct {
 	SidecarTimeout   time.Duration
 	SidecarTransport CommandRunner
 	MessageCacheTTL  time.Duration
+	// TopicMetadataCacheTTL 控制 exportMetadata 结果缓存时间，Dashboard 内写操作会主动清空缓存。
+	TopicMetadataCacheTTL time.Duration
 
-	cacheOnce          sync.Once
-	messageDetailCache *providerTTLCache[MessageDetail]
-	messageTraceCache  *providerTTLCache[[]TraceEvent]
-	consumerStateCache *providerTTLCache[[]ConsumerState]
+	cacheOnce             sync.Once
+	messageDetailCache    *providerTTLCache[MessageDetail]
+	messageTraceCache     *providerTTLCache[[]TraceEvent]
+	consumerStateCache    *providerTTLCache[[]ConsumerState]
+	topicMessageTypeCache *providerTTLCache[map[string]string]
 }
 
 type providerTTLCache[T any] struct {
@@ -92,6 +95,12 @@ func (c *providerTTLCache[T]) set(key string, value T, now time.Time) {
 	c.entries[key] = providerTTLCacheEntry[T]{value: value, at: now}
 }
 
+func (c *providerTTLCache[T]) clear() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	clear(c.entries)
+}
+
 func (p *MQAdminProvider) ensureMessageCaches() {
 	p.cacheOnce.Do(func() {
 		ttl := p.MessageCacheTTL
@@ -101,6 +110,11 @@ func (p *MQAdminProvider) ensureMessageCaches() {
 		p.messageDetailCache = newProviderTTLCache[MessageDetail](ttl)
 		p.messageTraceCache = newProviderTTLCache[[]TraceEvent](ttl)
 		p.consumerStateCache = newProviderTTLCache[[]ConsumerState](ttl)
+		topicMetadataTTL := p.TopicMetadataCacheTTL
+		if topicMetadataTTL <= 0 {
+			topicMetadataTTL = 30 * time.Second
+		}
+		p.topicMessageTypeCache = newProviderTTLCache[map[string]string](topicMetadataTTL)
 	})
 }
 
@@ -132,7 +146,85 @@ func (p *MQAdminProvider) TopicList(ctx context.Context) ([]Topic, error) {
 	if err != nil {
 		return nil, err
 	}
-	return ParseTopicList(output), nil
+	topics := ParseTopicList(output)
+	messageTypes, err := p.topicMessageTypes(ctx)
+	if err != nil {
+		return topics, nil
+	}
+	for index := range topics {
+		if messageType := strings.TrimSpace(messageTypes[topics[index].Name]); messageType != "" {
+			topics[index].MessageType = messageType
+		}
+	}
+	return topics, nil
+}
+
+// topicMessageTypes 通过官方 exportMetadata 读取所有集群的 Topic 属性，并用短缓存避免频繁导出元数据。
+func (p *MQAdminProvider) topicMessageTypes(ctx context.Context) (map[string]string, error) {
+	p.ensureMessageCaches()
+	cacheKey := strings.TrimSpace(p.NameServer)
+	if cached, ok := p.topicMessageTypeCache.get(cacheKey, time.Now()); ok {
+		return cached, nil
+	}
+
+	clusters, err := p.ClusterList(ctx)
+	if err != nil {
+		return nil, err
+	}
+	root, err := os.MkdirTemp("", "rmqdash-topic-metadata-")
+	if err != nil {
+		return nil, fmt.Errorf("创建 Topic 元数据临时目录失败: %w", err)
+	}
+	defer os.RemoveAll(root)
+
+	messageTypes := make(map[string]string)
+	seenClusters := make(map[string]bool)
+	for index, cluster := range clusters {
+		clusterName := strings.TrimSpace(cluster.Name)
+		if clusterName == "" || seenClusters[clusterName] {
+			continue
+		}
+		seenClusters[clusterName] = true
+		targetDir := filepath.Join(root, strconv.Itoa(index))
+		if err := os.MkdirAll(targetDir, 0o755); err != nil {
+			return nil, fmt.Errorf("创建集群 %s 的 Topic 元数据目录失败: %w", clusterName, err)
+		}
+		if _, err := p.run(ctx,
+			"exportMetadata",
+			"-n", p.NameServer,
+			"-c", clusterName,
+			"-t",
+			"-f", targetDir,
+		); err != nil {
+			return nil, err
+		}
+		metadata, err := os.ReadFile(filepath.Join(targetDir, "topic.json"))
+		if err != nil {
+			return nil, fmt.Errorf("读取集群 %s 的 Topic 元数据失败: %w", clusterName, err)
+		}
+		clusterTypes, err := ParseTopicMessageTypes(string(metadata))
+		if err != nil {
+			return nil, err
+		}
+		for topic, messageType := range clusterTypes {
+			messageType = strings.ToUpper(strings.TrimSpace(messageType))
+			if current := messageTypes[topic]; current != "" && current != messageType {
+				messageTypes[topic] = "MIXED"
+				continue
+			}
+			messageTypes[topic] = messageType
+		}
+	}
+	if len(seenClusters) == 0 {
+		return nil, errors.New("clusterList 未返回可导出 Topic 元数据的集群")
+	}
+	p.topicMessageTypeCache.set(cacheKey, messageTypes, time.Now())
+	return messageTypes, nil
+}
+
+func (p *MQAdminProvider) clearTopicMessageTypeCache() {
+	p.ensureMessageCaches()
+	p.topicMessageTypeCache.clear()
 }
 
 // TopicRoute 读取指定 Topic 的 Broker 路由、读写队列和权限分布。
@@ -247,6 +339,7 @@ func (p *MQAdminProvider) UpsertTopic(ctx context.Context, request TopicConfigMu
 	if err != nil {
 		return TopicMutationResult{}, err
 	}
+	p.clearTopicMessageTypeCache()
 	return TopicMutationResult{
 		Topic:     request.Topic,
 		Operation: "upsertTopic",
@@ -266,6 +359,7 @@ func (p *MQAdminProvider) DeleteTopic(ctx context.Context, request TopicDeleteRe
 	if err != nil {
 		return TopicMutationResult{}, err
 	}
+	p.clearTopicMessageTypeCache()
 	return TopicMutationResult{
 		Topic:     request.Topic,
 		Operation: "deleteTopic",

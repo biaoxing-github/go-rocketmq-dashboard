@@ -1694,24 +1694,59 @@ function capabilityPillClass(status) {
   }
 }
 
-// renderTopics 把 Topic 列表按类型区分展示，并为每行保留路由和队列水位查询入口。
+// topicTypePresentation 将 Topic 分类和官方 message.type 合并为用户可读的类型标签。
+function topicTypePresentation(topic) {
+  const kind = String(topic?.kind || "normal").toLowerCase();
+  const messageType = String(topic?.messageType || "UNKNOWN").toUpperCase();
+  if (kind === "retry") {
+    return { label: "重试", className: "retry" };
+  }
+  if (kind === "dlq") {
+    return { label: "死信", className: "dlq" };
+  }
+  if (kind === "system") {
+    return { label: "系统", className: "system" };
+  }
+  if (messageType === "TRANSACTION") {
+    return { label: "事务", className: "transaction" };
+  }
+  if (messageType === "FIFO") {
+    return { label: "顺序", className: "normal" };
+  }
+  if (messageType === "DELAY") {
+    return { label: "延时", className: "retry" };
+  }
+  if (messageType === "NORMAL") {
+    return { label: "普通", className: "normal" };
+  }
+  if (messageType === "MIXED") {
+    return { label: "混合", className: "danger" };
+  }
+  return { label: "未知", className: "system" };
+}
+
+// renderTopics 把 Topic 列表按消息类型区分展示，并为每行保留路由和队列水位查询入口。
 function renderTopics(payload) {
   state.lastTopicPayload = payload;
   const filteredTopics = filteredTopicRows();
   const visibleTopics = filteredTopics.slice(0, 120);
-  const rows = visibleTopics.map((topic) => `
-    <tr class="${state.selectedTopicName === topic.name ? "selected-row" : ""}">
-      <td class="topic-name-cell wrap-cell" title="${escapeHTML(topic.name)}">${escapeHTML(topic.name)}</td>
-      <td class="topic-kind-cell"><span class="tag tag-${escapeHTML(topic.kind)}">${escapeHTML(topic.kind)}</span></td>
-      <td class="topic-select-cell">
-        <div class="topic-actions">
-          <button class="route-action" type="button" data-topic-select="${escapeAttr(topic.name)}" aria-label="选择 ${escapeAttr(topic.name)}">
-            选择
-          </button>
-        </div>
-      </td>
-    </tr>
-  `);
+  const rows = visibleTopics.map((topic) => {
+    const type = topicTypePresentation(topic);
+    const rawType = `${topic.kind || "normal"} / ${topic.messageType || "UNKNOWN"}`;
+    return `
+      <tr class="${state.selectedTopicName === topic.name ? "selected-row" : ""}">
+        <td class="topic-name-cell wrap-cell" title="${escapeHTML(topic.name)}">${escapeHTML(topic.name)}</td>
+        <td class="topic-kind-cell" title="${escapeAttr(rawType)}"><span class="tag tag-${escapeAttr(type.className)}">${escapeHTML(type.label)}</span></td>
+        <td class="topic-select-cell">
+          <div class="topic-actions">
+            <button class="route-action" type="button" data-topic-select="${escapeAttr(topic.name)}" aria-label="选择 ${escapeAttr(topic.name)}">
+              选择
+            </button>
+          </div>
+        </td>
+      </tr>
+    `;
+  });
   $("#topicRows").innerHTML = rows.join("") || `<tr><td colspan="3">${escapeHTML(topicEmptyText())}</td></tr>`;
   renderTopicSearchCount(filteredTopics.length, visibleTopics.length);
   $("#topicStatus").textContent = snapshotStatusText(payload);
@@ -1731,7 +1766,9 @@ function filteredTopicRows() {
   return state.topics.filter((topic) => {
     const name = normalizeSearchText(topic.name);
     const kind = normalizeSearchText(topic.kind);
-    return name.includes(keyword) || kind.includes(keyword);
+    const messageType = normalizeSearchText(topic.messageType);
+    const typeLabel = normalizeSearchText(topicTypePresentation(topic).label);
+    return name.includes(keyword) || kind.includes(keyword) || messageType.includes(keyword) || typeLabel.includes(keyword);
   });
 }
 
@@ -3490,9 +3527,12 @@ function renderTimeline(payload) {
       <div><span>Queue</span><strong>${escapeHTML(detail.queueId ?? "-")}</strong></div>
       <div><span>Queue Offset</span><strong class="mono">${escapeHTML(detail.queueOffset ?? "-")}</strong></div>
       <div><span>Reconsume Times</span><strong>${escapeHTML(detail.reconsumeTimes ?? "-")}</strong></div>
+      <div><span>消息类型</span><strong>${messageTypeBadgeHTML(detail)}</strong></div>
+      <div><span>System Flag</span><strong class="mono">${escapeHTML(messageSystemFlag(detail))}</strong></div>
       <div><span>Store Time</span><strong>${escapeHTML(formatTime(detail.storeTimestamp))}</strong></div>
       <div><span>Store Host</span><strong>${escapeHTML(detail.storeHost || "-")}</strong></div>
     </div>
+    ${transactionMessageDetailHTML(detail)}
     <div class="body-preview">
       <span>Body Preview</span>
       <code>${escapeHTML(detail.bodyPreview || "-")}</code>
@@ -3501,6 +3541,58 @@ function renderTimeline(payload) {
 
   renderCandidates(candidates);
   renderSteps(steps);
+}
+
+// messageTypeBadgeHTML 根据消息详情展示普通消息或事务消息标签。
+function messageTypeBadgeHTML(detail) {
+  const transaction = detail?.transaction || {};
+  if (transaction.enabled) {
+    return `<span class="tag tag-transaction">事务消息</span>`;
+  }
+  return `<span class="tag tag-normal">普通消息</span>`;
+}
+
+// messageSystemFlag 在旧缓存缺少字段时返回横线，避免把未知误显示成 0。
+function messageSystemFlag(detail) {
+  if (detail?.systemFlag === undefined || detail?.systemFlag === null || detail?.systemFlag === "") {
+    return "-";
+  }
+  return String(detail.systemFlag);
+}
+
+// transactionStatePresentation 将后端事务状态映射为中文状态和视觉标签。
+function transactionStatePresentation(state) {
+  switch (String(state || "UNKNOWN").toUpperCase()) {
+    case "PREPARED":
+      return { label: "待确认", className: "retry" };
+    case "COMMITTED":
+      return { label: "已提交", className: "transaction" };
+    case "ROLLED_BACK":
+      return { label: "已回滚", className: "danger" };
+    default:
+      return { label: "状态未知", className: "system" };
+  }
+}
+
+// transactionMessageDetailHTML 展示事务消息专有字段，普通消息不额外占用页面空间。
+function transactionMessageDetailHTML(detail) {
+  const transaction = detail?.transaction || {};
+  if (!transaction.enabled) {
+    return "";
+  }
+  const state = transactionStatePresentation(transaction.state);
+  const realQueue = transaction.hasRealQueueId ? transaction.realQueueId : "-";
+  const checkTimes = transaction.hasCheckTimes ? transaction.checkTimes : "-";
+  return `
+    <div class="transaction-summary-grid">
+      <div><span>事务状态</span><strong><span class="tag tag-${escapeAttr(state.className)}">${escapeHTML(state.label)}</span></strong></div>
+      <div><span>Transaction ID</span><strong class="mono">${escapeHTML(transaction.transactionId || "-")}</strong></div>
+      <div><span>Producer Group</span><strong>${escapeHTML(transaction.producerGroup || "-")}</strong></div>
+      <div><span>Real Topic</span><strong>${escapeHTML(transaction.realTopic || detail.topic || "-")}</strong></div>
+      <div><span>Real Queue</span><strong class="mono">${escapeHTML(realQueue)}</strong></div>
+      <div><span>事务回查次数</span><strong>${escapeHTML(checkTimes)}</strong></div>
+    </div>
+  `;
 }
 
 // renderTimelinePending 展示无缓存或刷新失败状态，保留查询目标并为异步结果预留稳定空间。

@@ -118,10 +118,10 @@ func (p SampleProvider) ClusterFeatures(ctx context.Context) (ClusterFeatureRepo
 // TopicList 返回样例 Topic 列表。
 func (p SampleProvider) TopicList(ctx context.Context) ([]Topic, error) {
 	return []Topic{
-		{Name: "sample_notice_topic", Kind: "normal"},
-		{Name: "sample_order_events_topic", Kind: "normal"},
-		{Name: "%RETRY%sample-order-events-consumer", Kind: "retry"},
-		{Name: "%DLQ%sample-order-events-consumer", Kind: "dlq"},
+		{Name: "sample_notice_topic", Kind: "normal", MessageType: "NORMAL"},
+		{Name: "sample_order_events_topic", Kind: "normal", MessageType: "FIFO"},
+		{Name: "%RETRY%sample-order-events-consumer", Kind: "retry", MessageType: "NORMAL"},
+		{Name: "%DLQ%sample-order-events-consumer", Kind: "dlq", MessageType: "NORMAL"},
 	}, nil
 }
 

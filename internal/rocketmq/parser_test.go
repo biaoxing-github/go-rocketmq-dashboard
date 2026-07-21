@@ -112,6 +112,36 @@ sample_order_events_topic
 	}
 }
 
+func TestParseTopicMessageTypesReadsOfficialTopicMetadata(t *testing.T) {
+	output := `{
+		"topicConfigTable": {
+			"normal_topic": {
+				"attributes": {},
+				"order": false,
+				"topicName": "normal_topic"
+			},
+			"transaction_topic": {
+				"attributes": {"message.type": "TRANSACTION"},
+				"order": false,
+				"topicName": "transaction_topic"
+			},
+			"legacy_order_topic": {
+				"attributes": {},
+				"order": true,
+				"topicName": "legacy_order_topic"
+			}
+		}
+	}`
+
+	messageTypes, err := ParseTopicMessageTypes(output)
+	if err != nil {
+		t.Fatalf("ParseTopicMessageTypes returned error: %v", err)
+	}
+	if messageTypes["normal_topic"] != "NORMAL" || messageTypes["transaction_topic"] != "TRANSACTION" || messageTypes["legacy_order_topic"] != "FIFO" {
+		t.Fatalf("unexpected Topic message types: %#v", messageTypes)
+	}
+}
+
 func TestParseConfigSectionsReadsBrokerAndNameServerConfig(t *testing.T) {
 	output := `============Master: 127.0.0.1:10911============
 brokerName                                        =  broker-a
@@ -645,6 +675,62 @@ Message Body:        {"assessmentId":10001,"status":"created"}`
 	}
 	if message.TraceParent != "00-f548684403498fc90ec7ccc4ead087c7-02c2b68d0a05b7ee-00" {
 		t.Fatalf("unexpected traceparent: %s", message.TraceParent)
+	}
+	if message.SystemFlag != 0 || message.Transaction.Enabled || message.Transaction.State != "NOT_TRANSACTION" {
+		t.Fatalf("expected ordinary message metadata, got %#v", message.Transaction)
+	}
+}
+
+func TestParseMessageDetailReadsCommittedTransactionMetadata(t *testing.T) {
+	output := `OffsetID:            ACA8015D00002A9F00000000A3A5033D
+Topic:               dashboard_transaction_verify_topic
+Tags:                [TX_VERIFY]
+Keys:                [tx-verify-001]
+Queue ID:            0
+Queue Offset:        0
+CommitLog Offset:    2745500477
+Reconsume Times:     0
+Born Timestamp:      2026-07-21 03:06:17,074
+Store Timestamp:     2026-07-21 03:06:17,260
+Born Host:           174.168.99.4:14326
+Store Host:          172.168.1.93:10911
+System Flag:         8
+Properties:          {UNIQ_KEY=AC110003002267424E8267A9BC720000, PGROUP=dashboard_tx_verify_producer, __transactionId__=AC110003002267424E8267A9BC720000, TRAN_MSG=true, REAL_TOPIC=dashboard_transaction_verify_topic, REAL_QID=0, TRANSACTION_CHECK_TIMES=2}
+Message Body:        transaction-message-committed`
+
+	message, err := ParseMessageDetail(output)
+	if err != nil {
+		t.Fatalf("ParseMessageDetail returned error: %v", err)
+	}
+	transaction := message.Transaction
+	if message.SystemFlag != 8 || !transaction.Enabled || transaction.State != "COMMITTED" {
+		t.Fatalf("expected committed transaction metadata, got systemFlag=%d transaction=%#v", message.SystemFlag, transaction)
+	}
+	if transaction.TransactionID != "AC110003002267424E8267A9BC720000" || transaction.ProducerGroup != "dashboard_tx_verify_producer" {
+		t.Fatalf("unexpected transaction identity: %#v", transaction)
+	}
+	if transaction.RealTopic != "dashboard_transaction_verify_topic" || !transaction.HasRealQueueID || transaction.RealQueueID != 0 {
+		t.Fatalf("unexpected real destination: %#v", transaction)
+	}
+	if !transaction.HasCheckTimes || transaction.CheckTimes != 2 {
+		t.Fatalf("unexpected transaction check count: %#v", transaction)
+	}
+}
+
+func TestBuildTransactionMessageDetailDecodesRocketMQSystemStates(t *testing.T) {
+	cases := []struct {
+		systemFlag int
+		wantState  string
+	}{
+		{systemFlag: transactionPreparedSysFlag, wantState: "PREPARED"},
+		{systemFlag: transactionCommitSysFlag, wantState: "COMMITTED"},
+		{systemFlag: transactionRollbackSysFlag, wantState: "ROLLED_BACK"},
+	}
+	for _, testCase := range cases {
+		transaction := buildTransactionMessageDetail(testCase.systemFlag, map[string]string{"TRAN_MSG": "true"})
+		if !transaction.Enabled || transaction.State != testCase.wantState {
+			t.Fatalf("systemFlag=%d decoded as %#v, want %s", testCase.systemFlag, transaction, testCase.wantState)
+		}
 	}
 }
 
