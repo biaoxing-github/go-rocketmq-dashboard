@@ -25,6 +25,11 @@ func main() {
 	flag.Parse()
 
 	cfg := config.Load()
+	clusters := dashboardClusters(cfg)
+	primaryNameServer := cfg.NameServer
+	if len(clusters) > 0 {
+		primaryNameServer = clusters[0].NameServer
+	}
 	stopSidecar := startAdminSidecar(cfg)
 	if stopSidecar != nil {
 		defer stopSidecar()
@@ -32,7 +37,7 @@ func main() {
 	providerFactory := func(nameServer string) rocketmq.Provider {
 		return mqAdminProviderForMode(cfg, nameServer)
 	}
-	provider := providerFactory(cfg.NameServer)
+	provider := providerFactory(primaryNameServer)
 
 	if *checkCluster {
 		clusters, err := provider.ClusterList(context.Background())
@@ -47,43 +52,96 @@ func main() {
 		return
 	}
 
-	proxyRuntimeManager, proxyRuntimeErr := server.NewProxyRuntimeManager(server.ProxyRuntimeOptions{
-		RuntimeDir:           cfg.ProxyRuntimeDir,
-		JavaPath:             cfg.JavaPath,
-		RocketMQHome:         cfg.ProxyRocketMQHome,
-		NameServer:           cfg.NameServer,
-		ExternalHost:         cfg.ProxyExternalHost,
-		ExternalGRPCPort:     cfg.ProxyGRPCHostPort,
-		ExternalRemotingPort: cfg.ProxyRemotingHostPort,
-		HeapMB:               cfg.ProxyHeapMB,
-		StartTimeout:         cfg.ProxyStartTimeout,
-		StopTimeout:          cfg.ProxyStopTimeout,
-	})
-	if proxyRuntimeErr != nil {
-		log.Printf("RocketMQ Proxy runtime unavailable: %v", proxyRuntimeErr)
-		proxyRuntimeManager = nil
+	proxyClusterID, proxyNameServer, proxyEnabled, proxyBindingErr := resolveProxyRuntimeBinding(cfg, clusters, primaryNameServer)
+	if proxyBindingErr != nil {
+		log.Fatal(proxyBindingErr)
+	}
+	proxyRuntimes := make(map[string]server.ProxyRuntime)
+	if !proxyEnabled {
+		log.Printf("RocketMQ Proxy runtime controls disabled: set RMQD_PROXY_CLUSTER_ID for multi-cluster deployment")
 	} else {
-		defer proxyRuntimeManager.Close()
-		if err := proxyRuntimeManager.Restore(context.Background()); err != nil {
-			log.Printf("RocketMQ Proxy restore failed: %v", err)
+		proxyRuntimeManager, proxyRuntimeErr := server.NewProxyRuntimeManager(server.ProxyRuntimeOptions{
+			RuntimeDir:           cfg.ProxyRuntimeDir,
+			JavaPath:             cfg.JavaPath,
+			RocketMQHome:         cfg.ProxyRocketMQHome,
+			NameServer:           proxyNameServer,
+			ExternalHost:         cfg.ProxyExternalHost,
+			ExternalGRPCPort:     cfg.ProxyGRPCHostPort,
+			ExternalRemotingPort: cfg.ProxyRemotingHostPort,
+			HeapMB:               cfg.ProxyHeapMB,
+			StartTimeout:         cfg.ProxyStartTimeout,
+			StopTimeout:          cfg.ProxyStopTimeout,
+			ProbeTimeout:         cfg.ProxyProbeTimeout,
+		})
+		if proxyRuntimeErr != nil {
+			log.Printf("RocketMQ Proxy runtime unavailable: %v", proxyRuntimeErr)
+		} else {
+			defer proxyRuntimeManager.Close()
+			if err := proxyRuntimeManager.Restore(context.Background()); err != nil {
+				log.Printf("RocketMQ Proxy restore failed: %v", err)
+			}
+			proxyRuntimes[proxyClusterID] = proxyRuntimeManager
 		}
+	}
+	authenticator, err := server.LoadTokenAuthenticator(cfg.AuthCredentialsFile)
+	if err != nil {
+		log.Fatalf("load Dashboard write-operation credentials: %v", err)
 	}
 
 	app := server.New(server.AppConfig{
 		ProviderFactory:      providerFactory,
+		Clusters:             clusters,
 		ClusterCacheTTL:      cfg.ClusterCacheTTL,
 		MessageChainCacheTTL: cfg.MessageChainCacheTTL,
 		LatencyBudget:        cfg.CommandMaxLatency,
 		NameServer:           cfg.NameServer,
 		NameServerOptions:    cfg.NameServerOptions,
 		RuntimeConfigEnabled: cfg.RuntimeConfigEnabled,
-		ProxyRuntime:         proxyRuntimeManager,
+		ProxyRuntimes:        proxyRuntimes,
+		Authenticator:        authenticator,
+		AuditLogPath:         cfg.AuditLogPath,
 	})
 
-	log.Printf("RocketMQ Go Dashboard listening on %s, nameserver=%s", cfg.Addr, cfg.NameServer)
+	log.Printf("RocketMQ Go Dashboard listening on %s, configuredClusters=%d", cfg.Addr, len(clusters))
 	if err := http.ListenAndServe(cfg.Addr, app); err != nil {
 		log.Fatal(err)
 	}
+}
+
+// dashboardClusters 将部署配置的集群定义转换为 HTTP 层固定运行时定义。
+func dashboardClusters(cfg config.Config) []server.ClusterDefinition {
+	clusters := make([]server.ClusterDefinition, 0, len(cfg.Clusters))
+	for _, cluster := range cfg.Clusters {
+		clusters = append(clusters, server.ClusterDefinition{
+			ID:         cluster.ID,
+			Label:      cluster.Label,
+			NameServer: cluster.NameServer,
+		})
+	}
+	return clusters
+}
+
+// resolveProxyRuntimeBinding 将单个容器内 Proxy 显式绑定到一个集群，避免多集群控制面共享进程。
+func resolveProxyRuntimeBinding(cfg config.Config, clusters []server.ClusterDefinition, fallbackNameServer string) (string, string, bool, error) {
+	clusterID := strings.TrimSpace(cfg.ProxyClusterID)
+	if len(clusters) == 0 {
+		if clusterID != "" && clusterID != "default" {
+			return "", "", false, fmt.Errorf("RMQD_PROXY_CLUSTER_ID=%q 未匹配旧单集群部署", clusterID)
+		}
+		return "default", fallbackNameServer, true, nil
+	}
+	if clusterID == "" {
+		if len(clusters) == 1 {
+			return clusters[0].ID, clusters[0].NameServer, true, nil
+		}
+		return "", "", false, nil
+	}
+	for _, cluster := range clusters {
+		if cluster.ID == clusterID {
+			return cluster.ID, cluster.NameServer, true, nil
+		}
+	}
+	return "", "", false, fmt.Errorf("RMQD_PROXY_CLUSTER_ID=%q 未匹配 RMQD_CLUSTERS_JSON", clusterID)
 }
 
 func mqAdminProviderForMode(cfg config.Config, nameServer string) *rocketmq.MQAdminProvider {
@@ -102,6 +160,7 @@ func mqAdminProviderForMode(cfg config.Config, nameServer string) *rocketmq.MQAd
 		SidecarTimeout:   cfg.AdminSidecarTimeout,
 		MessageCacheTTL:  cfg.MessageChainCacheTTL,
 	}
+	provider.NativeMessageByOffset = nativeTopicMessageByOffsetReader(nameServer, goAdminShadowTimeout(cfg), goadminshadow.RunCommand)
 	switch strings.ToLower(strings.TrimSpace(cfg.AdminProvider)) {
 	case "sidecar":
 		provider.SidecarEnabled = true
@@ -120,6 +179,38 @@ func mqAdminProviderForMode(cfg config.Config, nameServer string) *rocketmq.MQAd
 		provider.SidecarEnabled = false
 	}
 	return provider
+}
+
+// nativeTopicMessageCommand 执行 Go 原生 queryMsgByOffset，并保留命令是否受原生实现支持的信号。
+type nativeTopicMessageCommand func(ctx context.Context, args []string, timeout time.Duration) (output string, supported bool, err error)
+
+// nativeTopicMessageByOffsetReader 将已验证的原生 QueryMessageByOffset 命令输出映射为 Dashboard 消息模型。
+func nativeTopicMessageByOffsetReader(nameServer string, timeout time.Duration, command nativeTopicMessageCommand) rocketmq.NativeMessageByOffsetReader {
+	return func(ctx context.Context, topic string, brokerName string, queueID int, offset int64) (rocketmq.MessageDetail, error) {
+		output, supported, err := command(ctx, []string{
+			"queryMsgByOffset",
+			"-n", nameServer,
+			"-t", topic,
+			"-b", brokerName,
+			"-i", fmt.Sprintf("%d", queueID),
+			"-o", fmt.Sprintf("%d", offset),
+			"-f", "UTF-8",
+		}, timeout)
+		if err != nil {
+			return rocketmq.MessageDetail{}, err
+		}
+		if !supported {
+			return rocketmq.MessageDetail{}, fmt.Errorf("原生 transport 不支持 queryMsgByOffset")
+		}
+		message, err := rocketmq.ParseMessageDetail(output)
+		if err != nil {
+			return rocketmq.MessageDetail{}, err
+		}
+		message.BrokerName = brokerName
+		message.QueueID = queueID
+		message.QueueOffset = offset
+		return message, nil
+	}
 }
 
 // processCommandRunnerWithGoAdminShadow 保持官方 mqadmin 进程为主路径，同时旁路执行 Go native shadow 对照。

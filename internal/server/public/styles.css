@@ -181,6 +181,34 @@ a {
   word-break: break-all;
 }
 
+.sidebar-select,
+.sidebar-input {
+  width: 100%;
+  min-height: 32px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  background: var(--surface);
+  font-family: Consolas, "Cascadia Code", monospace;
+  font-size: 12px;
+}
+
+.sidebar-select {
+  margin: 2px 0 8px;
+}
+
+.sidebar-input-label {
+  margin-top: 12px;
+}
+
+.sidebar-select:focus-visible,
+.sidebar-input:focus-visible {
+  border-color: var(--accent);
+  outline: 2px solid var(--accent-soft);
+  outline-offset: 1px;
+}
+
 .nameserver-actions {
   margin-top: 10px;
 }
@@ -1241,6 +1269,14 @@ td {
 .tag-retry {
   color: var(--warn);
   background: color-mix(in oklch, var(--warn) 12%, white);
+}
+
+/* Proxy Reflection 返回的服务名和失败原因可能较长，必须在摘要网格内换行。 */
+.runtime-probe-services,
+.runtime-probe-error {
+  min-width: 0;
+  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .tag-transaction {

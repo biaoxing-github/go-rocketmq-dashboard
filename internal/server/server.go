@@ -5,6 +5,7 @@ import (
 	"embed"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"strconv"
@@ -22,43 +23,42 @@ var staticFiles embed.FS
 
 // AppConfig 是 HTTP 服务的启动配置。
 type AppConfig struct {
-	Provider             rocketmq.Provider
-	ProviderFactory      func(nameServer string) rocketmq.Provider
+	Provider        rocketmq.Provider
+	ProviderFactory func(nameServer string) rocketmq.Provider
+	// Clusters 是启动时固定加载的多集群定义；每个请求通过 clusterId 选择其中之一。
+	Clusters             []ClusterDefinition
 	ClusterCacheTTL      time.Duration
 	MessageChainCacheTTL time.Duration
 	LatencyBudget        time.Duration
-	NameServer           string
-	NameServerOptions    []string
+	// NameServer 和 NameServerOptions 保留为单集群及旧部署配置的启动兼容输入。
+	NameServer        string
+	NameServerOptions []string
 	// RuntimeConfigEnabled 控制在线配置写入入口，部署环境需要显式开启。
 	RuntimeConfigEnabled bool
 	// ProxyRuntime 管理 Dashboard 容器内的官方 RocketMQ Proxy 进程。
+	// 该字段仅保留单集群部署兼容；多集群部署请使用 ProxyRuntimes 显式绑定。
 	ProxyRuntime ProxyRuntime
+	// ProxyRuntimes 将 Proxy 运行器按固定 clusterId 绑定。
+	ProxyRuntimes map[string]ProxyRuntime
+	// Authenticator 认证所有写操作；未配置时写操作默认拒绝。
+	Authenticator Authenticator
+	// AuditStore 保存写操作的开始、完成、读回和回滚事件。
+	AuditStore AuditStore
+	// AuditLogPath 是未显式注入 AuditStore 时的 JSONL 持久化路径。
+	AuditLogPath string
 }
 
 // App 承载 Dashboard HTTP 路由、RocketMQ Provider 和热点快照仓库。
 type App struct {
-	mux                     *http.ServeMux
-	mu                      sync.RWMutex
-	providerFactory         func(nameServer string) rocketmq.Provider
-	provider                rocketmq.Provider
-	clusterCacheTTL         time.Duration
-	messageChainCacheTTL    time.Duration
-	clusterSnapshot         *snapshotStore[[]rocketmq.Cluster]
-	topicSnapshot           *snapshotStore[[]rocketmq.Topic]
-	consumerSnapshot        *snapshotStore[[]rocketmq.ConsumerGroup]
-	featureSnapshot         *snapshotStore[rocketmq.ClusterFeatureReport]
-	topicRouteSnapshots     *keyedSnapshotStore[rocketmq.TopicRoute]
-	topicStatusSnapshots    *keyedSnapshotStore[rocketmq.TopicStatus]
-	topicMessageSnapshots   *keyedSnapshotStore[rocketmq.TopicMessages]
-	brokerStatusSnapshots   *keyedSnapshotStore[rocketmq.BrokerStatus]
-	consumerDetailSnapshots *keyedSnapshotStore[rocketmq.ConsumerDetail]
-	messageChainSnapshots   *keyedSnapshotStore[rocketmq.MessageStatusChain]
-	latencyBudget           time.Duration
-	nameServer              string
-	nameServerOptions       []string
-	runtimeConfigEnabled    bool
-	runtimeConfigMu         sync.Mutex
-	proxyRuntime            ProxyRuntime
+	mux                  *http.ServeMux
+	clusterMu            sync.RWMutex
+	providerFactory      func(nameServer string) rocketmq.Provider
+	clusters             map[string]*clusterRuntime
+	clusterOrder         []string
+	latencyBudget        time.Duration
+	runtimeConfigEnabled bool
+	authenticator        Authenticator
+	auditStore           AuditStore
 }
 
 // responsePayload 是所有 API 的统一响应结构，方便前端展示耗时、快照状态和缓存命中状态。
@@ -83,15 +83,9 @@ type refreshTriggerPayload struct {
 	Features  bool `json:"features"`
 }
 
-// dashboardConfigPayload 返回当前运行配置，前端用它渲染 NameServer 切换入口。
+// dashboardConfigPayload 返回启动时固定的集群列表，前端只在本会话中选择 clusterId。
 type dashboardConfigPayload struct {
-	NameServer           string   `json:"nameServer"`
-	AvailableNameServers []string `json:"availableNameServers"`
-}
-
-// nameServerUpdateRequest 表示运行时切换 NameServer 的请求体。
-type nameServerUpdateRequest struct {
-	NameServer string `json:"nameServer"`
+	Clusters []ClusterDefinition `json:"clusters"`
 }
 
 // topicMessagesIncrementalProvider 表示支持按旧快照复用历史消息 offset 的 Provider。
@@ -125,101 +119,45 @@ func New(config AppConfig) *App {
 		}
 	}
 
+	authenticator := config.Authenticator
+	if authenticator == nil {
+		authenticator = denyAuthenticator{}
+	}
+	auditStore := config.AuditStore
+	if auditStore == nil {
+		auditStore = NewFileAuditStore(config.AuditLogPath)
+	}
+	definitions := normalizeClusterDefinitions(config.Clusters, config.NameServer, config.NameServerOptions)
 	app := &App{
 		mux:                  http.NewServeMux(),
 		providerFactory:      providerFactory,
-		clusterCacheTTL:      ttl,
-		messageChainCacheTTL: messageChainCacheTTL(config.MessageChainCacheTTL, ttl),
+		clusters:             make(map[string]*clusterRuntime, len(definitions)),
+		clusterOrder:         make([]string, 0, len(definitions)),
 		latencyBudget:        budget,
-		nameServerOptions:    normalizeNameServerOptions(config.NameServer, config.NameServerOptions),
 		runtimeConfigEnabled: config.RuntimeConfigEnabled,
-		proxyRuntime:         config.ProxyRuntime,
+		authenticator:        authenticator,
+		auditStore:           auditStore,
 	}
-	app.installProviderLocked(providerFactory(config.NameServer), config.NameServer)
+	chainTTL := messageChainCacheTTL(config.MessageChainCacheTTL, ttl)
+	for _, definition := range definitions {
+		runtime := newClusterRuntime(definition, providerFactory(definition.NameServer), ttl, chainTTL)
+		runtime.proxyRuntime = config.ProxyRuntimes[definition.ID]
+		if runtime.proxyRuntime == nil && len(definitions) == 1 {
+			runtime.proxyRuntime = config.ProxyRuntime
+		}
+		app.clusters[definition.ID] = runtime
+		app.clusterOrder = append(app.clusterOrder, definition.ID)
+	}
 	app.routes()
-	app.refreshSnapshots(context.Background())
+	for _, clusterID := range app.clusterOrder {
+		app.clusters[clusterID].refreshSnapshots(context.Background())
+	}
 	return app
 }
 
 // ServeHTTP 将请求转交给内部路由器。
 func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	a.mux.ServeHTTP(w, r)
-}
-
-func (a *App) installProviderLocked(provider rocketmq.Provider, nameServer string) {
-	if provider == nil {
-		provider = rocketmq.SampleProvider{}
-	}
-	nameServer = strings.TrimSpace(nameServer)
-	a.provider = provider
-	ttl := a.clusterCacheTTL
-	a.clusterSnapshot = newSnapshotStore("clusters", ttl, provider.ClusterList)
-	a.topicSnapshot = newSnapshotStore("topics", ttl, provider.TopicList)
-	a.consumerSnapshot = newSnapshotStore("consumers", ttl, provider.ConsumerGroups)
-	if featureProvider, ok := provider.(clusterFeaturesProvider); ok {
-		a.featureSnapshot = newSnapshotStore("features", ttl, featureProvider.ClusterFeatures)
-	} else {
-		a.featureSnapshot = newSnapshotStore("features", ttl, func(context.Context) (rocketmq.ClusterFeatureReport, error) {
-			return rocketmq.ClusterFeatureReport{}, errors.New("当前 Provider 不支持能力画像")
-		})
-	}
-	a.topicRouteSnapshots = newKeyedSnapshotStore("topic-route", ttl, func(ctx context.Context, key string) (rocketmq.TopicRoute, error) {
-		return provider.TopicRoute(ctx, key)
-	})
-	a.topicStatusSnapshots = newKeyedSnapshotStore("topic-status", ttl, func(ctx context.Context, key string) (rocketmq.TopicStatus, error) {
-		return provider.TopicStatus(ctx, key)
-	})
-	loadTopicMessages := func(ctx context.Context, key string) (rocketmq.TopicMessages, error) {
-		query, err := messageBrowseQueryFromCacheKey(key)
-		if err != nil {
-			return rocketmq.TopicMessages{}, err
-		}
-		return provider.TopicMessages(ctx, query)
-	}
-	a.topicMessageSnapshots = newKeyedSnapshotStoreWithPrevious("topic-messages", ttl, loadTopicMessages, func(ctx context.Context, key string, previous rocketmq.TopicMessages, hasPrevious bool) (rocketmq.TopicMessages, error) {
-		query, err := messageBrowseQueryFromCacheKey(key)
-		if err != nil {
-			return rocketmq.TopicMessages{}, err
-		}
-		if hasPrevious {
-			if incrementalProvider, ok := provider.(topicMessagesIncrementalProvider); ok {
-				return incrementalProvider.TopicMessagesIncremental(ctx, query, previous)
-			}
-		}
-		return provider.TopicMessages(ctx, query)
-	})
-	a.brokerStatusSnapshots = newKeyedSnapshotStore("broker-status", ttl, func(ctx context.Context, key string) (rocketmq.BrokerStatus, error) {
-		return provider.BrokerStatus(ctx, key)
-	})
-	a.consumerDetailSnapshots = newKeyedSnapshotStore("consumer-detail", ttl, func(ctx context.Context, key string) (rocketmq.ConsumerDetail, error) {
-		group, topic := splitConsumerDetailCacheKey(key)
-		return provider.ConsumerDetail(ctx, group, topic)
-	})
-	a.messageChainSnapshots = newKeyedSnapshotStore("message-chain", a.messageChainCacheTTL, func(ctx context.Context, key string) (rocketmq.MessageStatusChain, error) {
-		query, err := messageQueryFromCacheKey(key)
-		if err != nil {
-			return rocketmq.MessageStatusChain{}, err
-		}
-		return provider.MessageChain(ctx, query)
-	})
-	a.nameServer = nameServer
-	a.nameServerOptions = normalizeNameServerOptions(nameServer, a.nameServerOptions)
-}
-
-func (a *App) switchNameServer(nameServer string) error {
-	nameServer = strings.TrimSpace(nameServer)
-	if nameServer == "" {
-		return errors.New("NameServer 必填")
-	}
-	provider := a.providerFactory(nameServer)
-	if provider == nil {
-		return errors.New("无法创建 NameServer Provider")
-	}
-	a.mu.Lock()
-	a.installProviderLocked(provider, nameServer)
-	a.mu.Unlock()
-	a.refreshSnapshots(context.Background())
-	return nil
 }
 
 func messageChainCacheTTL(configured time.Duration, clusterTTL time.Duration) time.Duration {
@@ -232,110 +170,81 @@ func messageChainCacheTTL(configured time.Duration, clusterTTL time.Duration) ti
 	return 30 * time.Minute
 }
 
-func (a *App) nameServerConfig() (string, []string) {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-	options := append([]string(nil), a.nameServerOptions...)
-	return a.nameServer, options
-}
-
 func (a *App) configPayload() dashboardConfigPayload {
-	nameServer, options := a.nameServerConfig()
-	return dashboardConfigPayload{NameServer: nameServer, AvailableNameServers: options}
+	a.clusterMu.RLock()
+	defer a.clusterMu.RUnlock()
+	clusters := make([]ClusterDefinition, 0, len(a.clusterOrder))
+	for _, clusterID := range a.clusterOrder {
+		clusters = append(clusters, a.clusters[clusterID].definition)
+	}
+	return dashboardConfigPayload{Clusters: clusters}
 }
 
-func (a *App) coreSnapshots() (*snapshotStore[[]rocketmq.Cluster], *snapshotStore[[]rocketmq.Topic], *snapshotStore[[]rocketmq.ConsumerGroup]) {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-	return a.clusterSnapshot, a.topicSnapshot, a.consumerSnapshot
+// clusterScoped 将请求解析到固定集群运行时，后续 handler 不再读取任何全局 Provider。
+func (a *App) clusterScoped(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		runtime, err := a.clusterRuntimeForRequest(r)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		contextWithRuntime := context.WithValue(r.Context(), clusterRuntimeContextKey{}, runtime)
+		next(w, r.WithContext(contextWithRuntime))
+	}
 }
 
-func (a *App) clusterSnapshotStore() *snapshotStore[[]rocketmq.Cluster] {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-	return a.clusterSnapshot
+// clusterRuntimeForRequest 只接受请求显式指定的 clusterId；单集群部署可安全推导唯一目标。
+func (a *App) clusterRuntimeForRequest(r *http.Request) (*clusterRuntime, error) {
+	queryID := strings.TrimSpace(r.URL.Query().Get("clusterId"))
+	headerID := strings.TrimSpace(r.Header.Get("X-RMQD-Cluster-ID"))
+	if queryID != "" && headerID != "" && queryID != headerID {
+		return nil, errors.New("clusterId 查询参数与 X-RMQD-Cluster-ID 不一致")
+	}
+	clusterID := queryID
+	if clusterID == "" {
+		clusterID = headerID
+	}
+	a.clusterMu.RLock()
+	defer a.clusterMu.RUnlock()
+	if clusterID == "" {
+		if len(a.clusterOrder) != 1 {
+			return nil, errors.New("多集群部署必须显式指定 clusterId")
+		}
+		clusterID = a.clusterOrder[0]
+	}
+	runtime, ok := a.clusters[clusterID]
+	if !ok {
+		return nil, fmt.Errorf("未知 clusterId: %s", clusterID)
+	}
+	return runtime, nil
 }
 
-func (a *App) topicSnapshotStore() *snapshotStore[[]rocketmq.Topic] {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-	return a.topicSnapshot
-}
-
-func (a *App) consumerSnapshotStore() *snapshotStore[[]rocketmq.ConsumerGroup] {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-	return a.consumerSnapshot
-}
-
-func (a *App) featureSnapshotStore() *snapshotStore[rocketmq.ClusterFeatureReport] {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-	return a.featureSnapshot
-}
-
-func (a *App) topicRouteSnapshotStore() *keyedSnapshotStore[rocketmq.TopicRoute] {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-	return a.topicRouteSnapshots
-}
-
-func (a *App) topicStatusSnapshotStore() *keyedSnapshotStore[rocketmq.TopicStatus] {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-	return a.topicStatusSnapshots
-}
-
-func (a *App) topicMessageSnapshotStore() *keyedSnapshotStore[rocketmq.TopicMessages] {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-	return a.topicMessageSnapshots
-}
-
-func (a *App) brokerStatusSnapshotStore() *keyedSnapshotStore[rocketmq.BrokerStatus] {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-	return a.brokerStatusSnapshots
-}
-
-func (a *App) consumerDetailSnapshotStore() *keyedSnapshotStore[rocketmq.ConsumerDetail] {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-	return a.consumerDetailSnapshots
-}
-
-func (a *App) messageChainSnapshotStore() *keyedSnapshotStore[rocketmq.MessageStatusChain] {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-	return a.messageChainSnapshots
-}
-
-// currentProvider 返回当前 NameServer 对应的 Provider，写操作需要直接调用它。
-func (a *App) currentProvider() rocketmq.Provider {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-	return a.provider
+// clusterRuntimeFromContext 返回 clusterScoped 预先绑定的请求运行时。
+func clusterRuntimeFromContext(ctx context.Context) *clusterRuntime {
+	runtime, _ := ctx.Value(clusterRuntimeContextKey{}).(*clusterRuntime)
+	return runtime
 }
 
 func (a *App) routes() {
-	a.mux.HandleFunc("/api/health", a.handleHealth)
+	a.mux.HandleFunc("/api/health", a.clusterScoped(a.handleHealth))
 	a.mux.HandleFunc("/api/config", a.handleConfig)
-	a.mux.HandleFunc("/api/runtime-config", a.handleRuntimeConfig)
-	a.mux.HandleFunc("/api/runtime-config/proxy", a.handleProxyRuntimeConfig)
-	a.mux.HandleFunc("/api/runtime-config/proxy/restart", a.handleProxyRuntimeRestart)
-	a.mux.HandleFunc("/api/refresh", a.handleRefresh)
-	a.mux.HandleFunc("/api/clusters", a.handleClusters)
-	a.mux.HandleFunc("/api/features", a.handleFeatures)
-	a.mux.HandleFunc("/api/topics", a.handleTopics)
-	a.mux.HandleFunc("/api/topic-route", a.handleTopicRoute)
-	a.mux.HandleFunc("/api/topic-status", a.handleTopicStatus)
-	a.mux.HandleFunc("/api/topic-messages", a.handleTopicMessages)
-	a.mux.HandleFunc("/api/topic-messages/send", a.handleTopicMessageSend)
-	a.mux.HandleFunc("/api/broker-status", a.handleBrokerStatus)
-	a.mux.HandleFunc("/api/consumers", a.handleConsumers)
-	a.mux.HandleFunc("/api/consumer-detail", a.handleConsumerDetail)
-	a.mux.HandleFunc("/api/consumer-offset/reset", a.handleConsumerOffsetReset)
-	a.mux.HandleFunc("/api/message-chain", a.handleMessageChain)
+	a.mux.HandleFunc("/api/runtime-config", a.clusterScoped(a.handleRuntimeConfig))
+	a.mux.HandleFunc("/api/runtime-config/proxy", a.clusterScoped(a.handleProxyRuntimeConfig))
+	a.mux.HandleFunc("/api/runtime-config/proxy/restart", a.clusterScoped(a.handleProxyRuntimeRestart))
+	a.mux.HandleFunc("/api/refresh", a.clusterScoped(a.handleRefresh))
+	a.mux.HandleFunc("/api/clusters", a.clusterScoped(a.handleClusters))
+	a.mux.HandleFunc("/api/features", a.clusterScoped(a.handleFeatures))
+	a.mux.HandleFunc("/api/topics", a.clusterScoped(a.handleTopics))
+	a.mux.HandleFunc("/api/topic-route", a.clusterScoped(a.handleTopicRoute))
+	a.mux.HandleFunc("/api/topic-status", a.clusterScoped(a.handleTopicStatus))
+	a.mux.HandleFunc("/api/topic-messages", a.clusterScoped(a.handleTopicMessages))
+	a.mux.HandleFunc("/api/topic-messages/send", a.clusterScoped(a.handleTopicMessageSend))
+	a.mux.HandleFunc("/api/broker-status", a.clusterScoped(a.handleBrokerStatus))
+	a.mux.HandleFunc("/api/consumers", a.clusterScoped(a.handleConsumers))
+	a.mux.HandleFunc("/api/consumer-detail", a.clusterScoped(a.handleConsumerDetail))
+	a.mux.HandleFunc("/api/consumer-offset/reset", a.clusterScoped(a.handleConsumerOffsetReset))
+	a.mux.HandleFunc("/api/message-chain", a.clusterScoped(a.handleMessageChain))
+	a.mux.HandleFunc("/api/audit", a.clusterScoped(a.handleAudit))
 	a.mux.HandleFunc("/", a.handleStatic)
 }
 
@@ -344,45 +253,29 @@ func (a *App) handleHealth(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, errors.New("仅支持 GET"))
 		return
 	}
-	nameServer, options := a.nameServerConfig()
+	runtime := clusterRuntimeFromContext(r.Context())
 	writeJSON(w, http.StatusOK, responsePayload[map[string]any]{
 		Code:    0,
 		Message: "ok",
 		Data: map[string]any{
-			"nameServer":           nameServer,
-			"availableNameServers": options,
-			"latencyBudgetMillis":  a.latencyBudget.Milliseconds(),
-			"mode":                 "go-dashboard-mqadmin-provider",
+			"clusterId":           runtime.definition.ID,
+			"nameServer":          runtime.definition.NameServer,
+			"latencyBudgetMillis": a.latencyBudget.Milliseconds(),
+			"mode":                "go-dashboard-mqadmin-provider",
 		},
 	})
 }
 
 func (a *App) handleConfig(w http.ResponseWriter, r *http.Request) {
-	switch r.Method {
-	case http.MethodGet:
-		writeJSON(w, http.StatusOK, responsePayload[dashboardConfigPayload]{
-			Code:    0,
-			Message: "ok",
-			Data:    a.configPayload(),
-		})
-	case http.MethodPost, http.MethodPut:
-		var request nameServerUpdateRequest
-		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-			writeError(w, http.StatusBadRequest, errors.New("请求体必须是 JSON"))
-			return
-		}
-		if err := a.switchNameServer(request.NameServer); err != nil {
-			writeError(w, http.StatusBadRequest, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, responsePayload[dashboardConfigPayload]{
-			Code:    0,
-			Message: "ok",
-			Data:    a.configPayload(),
-		})
-	default:
-		writeError(w, http.StatusMethodNotAllowed, errors.New("仅支持 GET/POST/PUT"))
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, errors.New("集群选择仅由请求 clusterId 指定，仅支持 GET"))
+		return
 	}
+	writeJSON(w, http.StatusOK, responsePayload[dashboardConfigPayload]{
+		Code:    0,
+		Message: "ok",
+		Data:    a.configPayload(),
+	})
 }
 
 func (a *App) handleRefresh(w http.ResponseWriter, r *http.Request) {
@@ -392,14 +285,13 @@ func (a *App) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	}
 
 	start := time.Now()
-	clusterSnapshot, topicSnapshot, consumerSnapshot := a.coreSnapshots()
-	featureSnapshot := a.featureSnapshotStore()
+	runtime := clusterRuntimeFromContext(r.Context())
 	triggered := refreshTriggerPayload{
 		// 每个 refreshAsync 都会拒绝重复并发任务，因此手动刷新不会放大 mqadmin 压力。
-		Clusters:  clusterSnapshot.refreshAsync(context.Background()),
-		Topics:    topicSnapshot.refreshAsync(context.Background()),
-		Consumers: consumerSnapshot.refreshAsync(context.Background()),
-		Features:  featureSnapshot.refreshAsync(context.Background()),
+		Clusters:  runtime.clusterSnapshot.refreshAsync(context.Background()),
+		Topics:    runtime.topicSnapshot.refreshAsync(context.Background()),
+		Consumers: runtime.consumerSnapshot.refreshAsync(context.Background()),
+		Features:  runtime.featureSnapshot.refreshAsync(context.Background()),
 	}
 	writeJSON(w, http.StatusOK, responsePayload[refreshTriggerPayload]{
 		Code:          0,
@@ -416,7 +308,8 @@ func (a *App) handleClusters(w http.ResponseWriter, r *http.Request) {
 	}
 
 	start := time.Now()
-	writeSnapshot(w, r, start, a.clusterSnapshotStore())
+	runtime := clusterRuntimeFromContext(r.Context())
+	writeSnapshot(w, r, start, runtime.clusterSnapshot)
 }
 
 func (a *App) handleFeatures(w http.ResponseWriter, r *http.Request) {
@@ -426,7 +319,8 @@ func (a *App) handleFeatures(w http.ResponseWriter, r *http.Request) {
 	}
 
 	start := time.Now()
-	store := a.featureSnapshotStore()
+	runtime := clusterRuntimeFromContext(r.Context())
+	store := runtime.featureSnapshot
 	if strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("refresh")), "true") {
 		store.refreshAsync(context.Background())
 	} else {
@@ -435,8 +329,7 @@ func (a *App) handleFeatures(w http.ResponseWriter, r *http.Request) {
 	view := store.view(time.Now())
 	report := view.Data
 	if !view.HasData {
-		nameServer, _ := a.nameServerConfig()
-		report = rocketmq.ClusterFeatureReport{NameServer: nameServer}
+		report = rocketmq.ClusterFeatureReport{NameServer: runtime.definition.NameServer}
 	}
 	writeJSON(w, http.StatusOK, responsePayload[rocketmq.ClusterFeatureReport]{
 		Code:                 0,
@@ -456,7 +349,8 @@ func (a *App) handleTopics(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		start := time.Now()
-		writeSnapshot(w, r, start, a.topicSnapshotStore())
+		runtime := clusterRuntimeFromContext(r.Context())
+		writeSnapshot(w, r, start, runtime.topicSnapshot)
 	case http.MethodPost, http.MethodPut:
 		a.handleTopicUpsert(w, r)
 	case http.MethodDelete:
@@ -531,19 +425,34 @@ func (a *App) handleTopicUpsert(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	provider := a.currentProvider()
+	runtime := clusterRuntimeFromContext(r.Context())
+	provider := runtime.provider
 	if provider == nil {
 		writeError(w, http.StatusInternalServerError, errors.New("当前 Provider 不可用"))
 		return
 	}
+	audit, err := a.beginMutation(r, PermissionTopicWrite, "topic.upsert", mutation.TargetLabel(), mutation)
+	if err != nil {
+		writeMutationAdmissionError(w, err)
+		return
+	}
+	w.Header().Set("X-RMQD-Operation-ID", audit.record.OperationID)
 	start := time.Now()
 	result, err := provider.UpsertTopic(r.Context(), mutation)
 	if err != nil {
+		if auditErr := audit.complete(r.Context(), nil, nil, err, false); auditErr != nil {
+			log.Printf("topic upsert audit completion failed operationId=%s error=%v", audit.record.OperationID, auditErr)
+		}
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	a.invalidateTopicCaches(mutation.Topic)
-	a.topicSnapshotStore().refreshAsync(context.Background())
+	runtime.invalidateTopicCaches(mutation.Topic)
+	runtime.topicSnapshot.refreshAsync(context.Background())
+	verification := map[string]any{"providerOutput": result.Output, "topic": result.Topic, "target": result.Target}
+	if err := audit.complete(r.Context(), result, verification, nil, false); err != nil {
+		writeError(w, http.StatusServiceUnavailable, fmt.Errorf("操作已执行，但审计完成记录失败: %w", err))
+		return
+	}
 	writeJSON(w, http.StatusOK, responsePayload[rocketmq.TopicMutationResult]{
 		Code:          0,
 		Message:       "ok",
@@ -567,19 +476,38 @@ func (a *App) handleTopicDelete(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	provider := a.currentProvider()
+	runtime := clusterRuntimeFromContext(r.Context())
+	provider := runtime.provider
 	if provider == nil {
 		writeError(w, http.StatusInternalServerError, errors.New("当前 Provider 不可用"))
 		return
 	}
+	target := strings.TrimSpace(deleteRequest.ClusterName)
+	if target == "" {
+		target = "cluster"
+	}
+	audit, err := a.beginMutation(r, PermissionTopicWrite, "topic.delete", target+"/"+deleteRequest.Topic, deleteRequest)
+	if err != nil {
+		writeMutationAdmissionError(w, err)
+		return
+	}
+	w.Header().Set("X-RMQD-Operation-ID", audit.record.OperationID)
 	start := time.Now()
 	result, err := provider.DeleteTopic(r.Context(), deleteRequest)
 	if err != nil {
+		if auditErr := audit.complete(r.Context(), nil, nil, err, false); auditErr != nil {
+			log.Printf("topic delete audit completion failed operationId=%s error=%v", audit.record.OperationID, auditErr)
+		}
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	a.invalidateTopicCaches(deleteRequest.Topic)
-	a.topicSnapshotStore().refreshAsync(context.Background())
+	runtime.invalidateTopicCaches(deleteRequest.Topic)
+	runtime.topicSnapshot.refreshAsync(context.Background())
+	verification := map[string]any{"providerOutput": result.Output, "topic": result.Topic, "target": result.Target}
+	if err := audit.complete(r.Context(), result, verification, nil, false); err != nil {
+		writeError(w, http.StatusServiceUnavailable, fmt.Errorf("操作已执行，但审计完成记录失败: %w", err))
+		return
+	}
 	writeJSON(w, http.StatusOK, responsePayload[rocketmq.TopicMutationResult]{
 		Code:          0,
 		Message:       "ok",
@@ -612,42 +540,52 @@ func (a *App) handleTopicMessageSend(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	provider := a.currentProvider()
+	runtime := clusterRuntimeFromContext(r.Context())
+	provider := runtime.provider
 	if provider == nil {
 		writeError(w, http.StatusInternalServerError, errors.New("当前 Provider 不可用"))
 		return
 	}
+	auditInput := map[string]any{
+		"topic":       sendRequest.Topic,
+		"keys":        sendRequest.Keys,
+		"tags":        sendRequest.Tags,
+		"brokerName":  sendRequest.BrokerName,
+		"queueId":     sendRequest.QueueID,
+		"traceEnable": sendRequest.TraceEnable,
+		"bodyBytes":   len([]byte(sendRequest.Body)),
+	}
+	audit, err := a.beginMutation(r, PermissionTopicWrite, "message.send", sendRequest.TargetLabel(), auditInput)
+	if err != nil {
+		writeMutationAdmissionError(w, err)
+		return
+	}
+	w.Header().Set("X-RMQD-Operation-ID", audit.record.OperationID)
 	start := time.Now()
 	log.Printf("topic message send started topic=%q target=%q trace=%t bodyBytes=%d", sendRequest.Topic, sendRequest.TargetLabel(), sendRequest.TraceEnable, len([]byte(sendRequest.Body)))
 	result, err := provider.SendTopicMessage(r.Context(), sendRequest)
 	latency := time.Since(start)
 	if err != nil {
 		log.Printf("topic message send failed topic=%q target=%q latency=%s error=%v", sendRequest.Topic, sendRequest.TargetLabel(), latency, err)
+		if auditErr := audit.complete(r.Context(), nil, nil, err, false); auditErr != nil {
+			log.Printf("message send audit completion failed operationId=%s error=%v", audit.record.OperationID, auditErr)
+		}
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
 	log.Printf("topic message send succeeded topic=%q target=%q messageId=%q status=%q latency=%s", sendRequest.Topic, sendRequest.TargetLabel(), result.MessageID, result.SendStatus, latency)
-	a.invalidateTopicCaches(sendRequest.Topic)
+	runtime.invalidateTopicCaches(sendRequest.Topic)
+	verification := map[string]any{"messageId": result.MessageID, "sendStatus": result.SendStatus, "brokerName": result.BrokerName, "queueId": result.QueueID}
+	if err := audit.complete(r.Context(), result, verification, nil, false); err != nil {
+		writeError(w, http.StatusServiceUnavailable, fmt.Errorf("操作已执行，但审计完成记录失败: %w", err))
+		return
+	}
 	writeJSON(w, http.StatusOK, responsePayload[rocketmq.TopicMessageSendResult]{
 		Code:          0,
 		Message:       "ok",
 		Data:          result,
 		LatencyMillis: latency.Milliseconds(),
 	})
-}
-
-// invalidateTopicCaches 清理 Topic 相关的路由、水位、消息和链路快照，让写操作后的下一次读取重新拉取数据。
-func (a *App) invalidateTopicCaches(topic string) {
-	topic = strings.TrimSpace(topic)
-	a.topicRouteSnapshotStore().clear()
-	a.topicStatusSnapshotStore().clear()
-	a.topicMessageSnapshotStore().clear()
-	if topic == "" {
-		return
-	}
-	a.topicRouteSnapshotStore().delete(topic)
-	a.topicStatusSnapshotStore().delete(topic)
-	a.topicMessageSnapshotStore().delete(topic)
 }
 
 func (a *App) handleTopicRoute(w http.ResponseWriter, r *http.Request) {
@@ -662,7 +600,8 @@ func (a *App) handleTopicRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	start := time.Now()
-	store := a.topicRouteSnapshotStore().snapshot(topic)
+	runtime := clusterRuntimeFromContext(r.Context())
+	store := runtime.topicRouteSnapshots.snapshot(topic)
 	if strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("refresh")), "true") {
 		store.refreshAsync(context.Background())
 	} else {
@@ -699,7 +638,8 @@ func (a *App) handleTopicStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	start := time.Now()
-	store := a.topicStatusSnapshotStore().snapshot(topic)
+	runtime := clusterRuntimeFromContext(r.Context())
+	store := runtime.topicStatusSnapshots.snapshot(topic)
 	if strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("refresh")), "true") {
 		store.refreshAsync(context.Background())
 	} else {
@@ -741,7 +681,8 @@ func (a *App) handleTopicMessages(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	store := a.topicMessageSnapshotStore().snapshot(key)
+	runtime := clusterRuntimeFromContext(r.Context())
+	store := runtime.topicMessageSnapshots.snapshot(key)
 	if strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("refresh")), "true") {
 		store.refreshAsync(context.Background())
 	} else {
@@ -778,7 +719,8 @@ func (a *App) handleBrokerStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	start := time.Now()
-	store := a.brokerStatusSnapshotStore().snapshot(brokerAddr)
+	runtime := clusterRuntimeFromContext(r.Context())
+	store := runtime.brokerStatusSnapshots.snapshot(brokerAddr)
 	if strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("refresh")), "true") {
 		store.refreshAsync(context.Background())
 	} else {
@@ -810,7 +752,8 @@ func (a *App) handleConsumers(w http.ResponseWriter, r *http.Request) {
 	}
 
 	start := time.Now()
-	writeSnapshot(w, r, start, a.consumerSnapshotStore())
+	runtime := clusterRuntimeFromContext(r.Context())
+	writeSnapshot(w, r, start, runtime.consumerSnapshot)
 }
 
 func (a *App) handleConsumerDetail(w http.ResponseWriter, r *http.Request) {
@@ -827,7 +770,8 @@ func (a *App) handleConsumerDetail(w http.ResponseWriter, r *http.Request) {
 	}
 	start := time.Now()
 	key := consumerDetailCacheKey(group, topic)
-	store := a.consumerDetailSnapshotStore().snapshot(key)
+	runtime := clusterRuntimeFromContext(r.Context())
+	store := runtime.consumerDetailSnapshots.snapshot(key)
 	if strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("refresh")), "true") {
 		store.refreshAsync(context.Background())
 	} else {
@@ -877,20 +821,36 @@ func (a *App) handleConsumerOffsetReset(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	resetRequest = resetRequest.Normalized()
-	provider := a.currentProvider()
+	runtime := clusterRuntimeFromContext(r.Context())
+	provider := runtime.provider
 	if provider == nil {
 		writeError(w, http.StatusInternalServerError, errors.New("当前 Provider 不可用"))
 		return
 	}
+	target := fmt.Sprintf("%s/%s", resetRequest.Group, resetRequest.Topic)
+	audit, err := a.beginMutation(r, PermissionTopicWrite, "consumer-offset.reset", target, resetRequest)
+	if err != nil {
+		writeMutationAdmissionError(w, err)
+		return
+	}
+	w.Header().Set("X-RMQD-Operation-ID", audit.record.OperationID)
 	start := time.Now()
 	result, err := provider.ResetConsumerOffset(r.Context(), resetRequest)
 	if err != nil {
+		if auditErr := audit.complete(r.Context(), nil, nil, err, false); auditErr != nil {
+			log.Printf("consumer offset reset audit completion failed operationId=%s error=%v", audit.record.OperationID, auditErr)
+		}
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	a.consumerDetailSnapshotStore().delete(consumerDetailCacheKey(resetRequest.Group, resetRequest.Topic))
-	a.consumerDetailSnapshotStore().delete(consumerDetailCacheKey(resetRequest.Group, ""))
-	a.consumerSnapshotStore().refreshAsync(context.Background())
+	runtime.consumerDetailSnapshots.delete(consumerDetailCacheKey(resetRequest.Group, resetRequest.Topic))
+	runtime.consumerDetailSnapshots.delete(consumerDetailCacheKey(resetRequest.Group, ""))
+	runtime.consumerSnapshot.refreshAsync(context.Background())
+	verification := map[string]any{"providerOutput": result.Output, "group": result.Group, "topic": result.Topic, "target": result.Target}
+	if err := audit.complete(r.Context(), result, verification, nil, false); err != nil {
+		writeError(w, http.StatusServiceUnavailable, fmt.Errorf("操作已执行，但审计完成记录失败: %w", err))
+		return
+	}
 	writeJSON(w, http.StatusOK, responsePayload[rocketmq.ConsumerOffsetResetResult]{
 		Code:          0,
 		Message:       "ok",
@@ -916,7 +876,8 @@ func (a *App) handleMessageChain(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	store := a.messageChainSnapshotStore().snapshot(key)
+	runtime := clusterRuntimeFromContext(r.Context())
+	store := runtime.messageChainSnapshots.snapshot(key)
 	if strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("refresh")), "true") {
 		store.refreshAsync(context.Background())
 	} else {
@@ -951,14 +912,6 @@ func (a *App) handleStatic(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.ServeFileFS(w, r, staticFiles, "public/"+path)
-}
-
-// refreshSnapshots 启动首屏核心数据预热，三个 mqadmin 命令并行执行以缩短冷启动等待。
-func (a *App) refreshSnapshots(ctx context.Context) {
-	clusterSnapshot, topicSnapshot, consumerSnapshot := a.coreSnapshots()
-	clusterSnapshot.refreshAsync(ctx)
-	topicSnapshot.refreshAsync(ctx)
-	consumerSnapshot.refreshAsync(ctx)
 }
 
 // writeSnapshot 只读取内存快照并按需触发后台刷新，保证 HTTP 热路径不被 RocketMQ 管理命令拖慢。

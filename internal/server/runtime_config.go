@@ -133,7 +133,7 @@ type ProxyRuntimeSnapshot struct {
 	Enabled bool `json:"enabled"`
 	// Running 表示 Proxy Java 进程仍在运行。
 	Running bool `json:"running"`
-	// Healthy 表示 gRPC 监听端口已经可以建立 TCP 连接。
+	// Healthy 表示 gRPC Reflection 已发现 RocketMQ MessagingService。
 	Healthy bool `json:"healthy"`
 	// Status 是 disabled、stopped、starting、running、error 或 unavailable。
 	Status string `json:"status"`
@@ -147,6 +147,14 @@ type ProxyRuntimeSnapshot struct {
 	GrpcExternalEndpoint string `json:"grpcExternalEndpoint"`
 	// RemotingExternalEndpoint 是客户端访问 Remoting Proxy 时使用的宿主机映射地址。
 	RemotingExternalEndpoint string `json:"remotingExternalEndpoint"`
+	// GrpcProbeEndpoint 是 Dashboard 实际执行 Reflection 服务发现的容器内地址。
+	GrpcProbeEndpoint string `json:"grpcProbeEndpoint"`
+	// GrpcProbeSuccessAtUnixMilli 是最近一次成功发现 RocketMQ gRPC 服务的时间。
+	GrpcProbeSuccessAtUnixMilli int64 `json:"grpcProbeSuccessAtUnixMilli"`
+	// GrpcProbeError 是最近一次 Reflection 服务发现失败的原因。
+	GrpcProbeError string `json:"grpcProbeError,omitempty"`
+	// GrpcServices 是最近一次 Reflection 服务发现返回的服务全名。
+	GrpcServices []string `json:"grpcServices,omitempty"`
 	// StartedAtUnixMilli 是最近一次成功启动时间。
 	StartedAtUnixMilli int64 `json:"startedAtUnixMilli"`
 	// RestartCount 是当前 Dashboard 进程内成功启动 Proxy 的次数。
@@ -179,14 +187,15 @@ type ProxyRuntime interface {
 func (a *App) handleRuntimeConfig(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		_, clusterWritable := a.currentProvider().(runtimeConfigCommandProvider)
+		runtime := clusterRuntimeFromContext(r.Context())
+		_, clusterWritable := runtime.provider.(runtimeConfigCommandProvider)
 		writeJSON(w, http.StatusOK, responsePayload[runtimeConfigPayload]{
 			Code:    0,
 			Message: "ok",
 			Data: runtimeConfigPayload{
 				Enabled:         a.runtimeConfigEnabled,
 				ClusterWritable: a.runtimeConfigEnabled && clusterWritable,
-				Proxy:           a.proxyRuntimeSnapshot(),
+				Proxy:           proxyRuntimeSnapshot(runtime),
 			},
 		})
 	case http.MethodPut, http.MethodPost:
@@ -199,10 +208,25 @@ func (a *App) handleRuntimeConfig(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, errors.New("请求体必须是 JSON"))
 			return
 		}
-		start := time.Now()
-		result, err := a.applyRuntimeConfigChange(r.Context(), request)
+		runtime := clusterRuntimeFromContext(r.Context())
+		target := fmt.Sprintf("%s/%s/%s", strings.TrimSpace(request.Scope), strings.TrimSpace(request.Target), strings.TrimSpace(request.Key))
+		audit, err := a.beginMutation(r, PermissionRuntimeConfig, "runtime-config.apply", target, request)
 		if err != nil {
+			writeMutationAdmissionError(w, err)
+			return
+		}
+		w.Header().Set("X-RMQD-Operation-ID", audit.record.OperationID)
+		start := time.Now()
+		result, err := a.applyRuntimeConfigChange(r.Context(), runtime, request)
+		if err != nil {
+			if auditErr := audit.complete(r.Context(), result, result, err, result.RolledBack); auditErr != nil {
+				log.Printf("runtime config audit completion failed operationId=%s error=%v", audit.record.OperationID, auditErr)
+			}
 			writeError(w, http.StatusBadGateway, err)
+			return
+		}
+		if err := audit.complete(r.Context(), result, result, nil, result.RolledBack); err != nil {
+			writeError(w, http.StatusServiceUnavailable, fmt.Errorf("操作已执行，但审计完成记录失败: %w", err))
 			return
 		}
 		writeJSON(w, http.StatusOK, responsePayload[runtimeConfigApplyPayload]{
@@ -226,7 +250,9 @@ func (a *App) handleProxyRuntimeConfig(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, errors.New("当前部署未开启在线配置写入"))
 		return
 	}
-	if a.proxyRuntime == nil {
+	runtime := clusterRuntimeFromContext(r.Context())
+	proxyRuntime := runtime.proxyRuntime
+	if proxyRuntime == nil {
 		writeError(w, http.StatusServiceUnavailable, errors.New("当前部署未配置 RocketMQ Proxy 运行器"))
 		return
 	}
@@ -237,10 +263,27 @@ func (a *App) handleProxyRuntimeConfig(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errors.New("请求体必须是 JSON"))
 		return
 	}
-	start := time.Now()
-	snapshot, err := a.proxyRuntime.Apply(r.Context(), request)
+	before := proxyRuntimeSnapshot(runtime)
+	audit, err := a.beginMutation(r, PermissionRuntimeConfig, "proxy.apply", "rocketmq-proxy", map[string]any{
+		"enabled":  request.Enabled,
+		"settings": before.Fields,
+	})
 	if err != nil {
+		writeMutationAdmissionError(w, err)
+		return
+	}
+	w.Header().Set("X-RMQD-Operation-ID", audit.record.OperationID)
+	start := time.Now()
+	snapshot, err := proxyRuntime.Apply(r.Context(), request)
+	if err != nil {
+		if auditErr := audit.complete(r.Context(), snapshot, snapshot, err, true); auditErr != nil {
+			log.Printf("proxy apply audit completion failed operationId=%s error=%v", audit.record.OperationID, auditErr)
+		}
 		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	if err := audit.complete(r.Context(), snapshot, snapshot, nil, false); err != nil {
+		writeError(w, http.StatusServiceUnavailable, fmt.Errorf("操作已执行，但审计完成记录失败: %w", err))
 		return
 	}
 	writeJSON(w, http.StatusOK, responsePayload[ProxyRuntimeSnapshot]{
@@ -261,14 +304,30 @@ func (a *App) handleProxyRuntimeRestart(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusForbidden, errors.New("当前部署未开启在线配置写入"))
 		return
 	}
-	if a.proxyRuntime == nil {
+	runtime := clusterRuntimeFromContext(r.Context())
+	proxyRuntime := runtime.proxyRuntime
+	if proxyRuntime == nil {
 		writeError(w, http.StatusServiceUnavailable, errors.New("当前部署未配置 RocketMQ Proxy 运行器"))
 		return
 	}
-	start := time.Now()
-	snapshot, err := a.proxyRuntime.Restart(r.Context())
+	before := proxyRuntimeSnapshot(runtime)
+	audit, err := a.beginMutation(r, PermissionRuntimeConfig, "proxy.restart", "rocketmq-proxy", before)
 	if err != nil {
+		writeMutationAdmissionError(w, err)
+		return
+	}
+	w.Header().Set("X-RMQD-Operation-ID", audit.record.OperationID)
+	start := time.Now()
+	snapshot, err := proxyRuntime.Restart(r.Context())
+	if err != nil {
+		if auditErr := audit.complete(r.Context(), snapshot, snapshot, err, false); auditErr != nil {
+			log.Printf("proxy restart audit completion failed operationId=%s error=%v", audit.record.OperationID, auditErr)
+		}
 		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	if err := audit.complete(r.Context(), snapshot, snapshot, nil, false); err != nil {
+		writeError(w, http.StatusServiceUnavailable, fmt.Errorf("操作已执行，但审计完成记录失败: %w", err))
 		return
 	}
 	writeJSON(w, http.StatusOK, responsePayload[ProxyRuntimeSnapshot]{
@@ -279,18 +338,18 @@ func (a *App) handleProxyRuntimeRestart(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
-// proxyRuntimeSnapshot 在未配置运行器时返回明确的不可用状态。
-func (a *App) proxyRuntimeSnapshot() ProxyRuntimeSnapshot {
-	if a.proxyRuntime == nil {
+// proxyRuntimeSnapshot 在当前集群未配置运行器时返回明确的不可用状态。
+func proxyRuntimeSnapshot(runtime *clusterRuntime) ProxyRuntimeSnapshot {
+	if runtime == nil || runtime.proxyRuntime == nil {
 		return ProxyRuntimeSnapshot{Status: "unavailable", LastError: "当前部署未配置 RocketMQ Proxy 运行器"}
 	}
-	return a.proxyRuntime.Snapshot()
+	return runtime.proxyRuntime.Snapshot()
 }
 
-// applyRuntimeConfigChange 串行执行读取、更新、回读和失败回滚，避免并发写入相互覆盖。
-func (a *App) applyRuntimeConfigChange(ctx context.Context, request runtimeConfigChangeRequest) (runtimeConfigApplyPayload, error) {
-	a.runtimeConfigMu.Lock()
-	defer a.runtimeConfigMu.Unlock()
+// applyRuntimeConfigChange 串行执行同一集群的读取、更新、回读和失败回滚，避免并发写入相互覆盖。
+func (a *App) applyRuntimeConfigChange(ctx context.Context, runtime *clusterRuntime, request runtimeConfigChangeRequest) (runtimeConfigApplyPayload, error) {
+	runtime.runtimeConfigMu.Lock()
+	defer runtime.runtimeConfigMu.Unlock()
 
 	scope := strings.ToLower(strings.TrimSpace(request.Scope))
 	if scope != "broker" && scope != "nameserver" {
@@ -308,7 +367,7 @@ func (a *App) applyRuntimeConfigChange(ctx context.Context, request runtimeConfi
 		return runtimeConfigApplyPayload{}, errors.New("配置 value 不能包含换行且长度不能超过 8192")
 	}
 
-	provider := a.currentProvider()
+	provider := runtime.provider
 	commandProvider, ok := provider.(runtimeConfigCommandProvider)
 	if !ok {
 		return runtimeConfigApplyPayload{}, errors.New("当前 Provider 不支持在线配置命令")
@@ -339,8 +398,8 @@ func (a *App) applyRuntimeConfigChange(ctx context.Context, request runtimeConfi
 	for _, change := range pending {
 		changed := change.previous != change.value
 		if changed {
-			if err := writeRuntimeConfigValue(ctx, commandProvider, scope, change.target, key, change.value, a.currentNameServer()); err != nil {
-				rollbackErr := rollbackRuntimeConfigChanges(ctx, commandProvider, scope, key, applied, a.currentNameServer())
+			if err := writeRuntimeConfigValue(ctx, commandProvider, scope, change.target, key, change.value, runtime.definition.NameServer); err != nil {
+				rollbackErr := rollbackRuntimeConfigChanges(ctx, commandProvider, scope, key, applied, runtime.definition.NameServer)
 				return runtimeConfigApplyPayload{Results: results, RolledBack: len(applied) > 0}, runtimeConfigApplyError(err, rollbackErr)
 			}
 			applied = append(applied, change)
@@ -350,7 +409,7 @@ func (a *App) applyRuntimeConfigChange(ctx context.Context, request runtimeConfi
 				if verifyErr == nil {
 					verifyErr = fmt.Errorf("回读值为 %q，期望 %q", actual, change.value)
 				}
-				rollbackErr := rollbackRuntimeConfigChanges(ctx, commandProvider, scope, key, applied, a.currentNameServer())
+				rollbackErr := rollbackRuntimeConfigChanges(ctx, commandProvider, scope, key, applied, runtime.definition.NameServer)
 				return runtimeConfigApplyPayload{Results: results, RolledBack: true}, runtimeConfigApplyError(fmt.Errorf("%s %s 配置回读校验失败: %w", scope, change.target, verifyErr), rollbackErr)
 			}
 		}
@@ -367,15 +426,9 @@ func (a *App) applyRuntimeConfigChange(ctx context.Context, request runtimeConfi
 
 	if len(applied) > 0 {
 		log.Printf("runtime config updated scope=%q targets=%d key=%q restartRequired=%t", scope, len(applied), key, runtimeConfigRequiresRestart(key))
-		a.featureSnapshotStore().refreshAsync(context.Background())
+		runtime.featureSnapshot.refreshAsync(context.Background())
 	}
 	return runtimeConfigApplyPayload{Results: results, RestartRequired: runtimeConfigRequiresRestart(key)}, nil
-}
-
-// currentNameServer 返回写 Broker 配置命令使用的当前 NameServer 地址。
-func (a *App) currentNameServer() string {
-	nameServer, _ := a.nameServerConfig()
-	return nameServer
 }
 
 // runtimeConfigTargets 从最新能力画像中限定允许修改的节点，并展开星号批量目标。

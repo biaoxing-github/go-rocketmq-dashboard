@@ -113,11 +113,11 @@ func (f *fakeProxyRuntime) Restart(ctx context.Context) (ProxyRuntimeSnapshot, e
 func TestRuntimeConfigEndpointUpdatesAndReadsBackBrokerBoolean(t *testing.T) {
 	provider := newRuntimeConfigTestProvider()
 	proxy := &fakeProxyRuntime{snapshot: ProxyRuntimeSnapshot{Available: true, Status: "disabled"}}
-	app := New(AppConfig{Provider: provider, RuntimeConfigEnabled: true, ProxyRuntime: proxy, ClusterCacheTTL: time.Hour})
+	app := New(mutationTestAppConfig(t, AppConfig{Provider: provider, RuntimeConfigEnabled: true, ProxyRuntime: proxy, ClusterCacheTTL: time.Hour}))
 
 	body := bytes.NewBufferString(`{"scope":"broker","target":"127.0.0.1:10911","key":"autoCreateTopicEnable","value":"true"}`)
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPut, "/api/runtime-config", body)
+	request := authorizedMutationRequest(http.MethodPut, "/api/runtime-config", body)
 	app.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
@@ -143,11 +143,11 @@ func TestRuntimeConfigEndpointUpdatesAllNameServers(t *testing.T) {
 		"clusterTest":  "false",
 		"rocketmqHome": "/opt/rocketmq",
 	}
-	app := New(AppConfig{Provider: provider, RuntimeConfigEnabled: true, ClusterCacheTTL: time.Hour})
+	app := New(mutationTestAppConfig(t, AppConfig{Provider: provider, RuntimeConfigEnabled: true, ClusterCacheTTL: time.Hour}))
 
 	body := bytes.NewBufferString(`{"scope":"nameserver","target":"*","key":"clusterTest","value":"true"}`)
 	recorder := httptest.NewRecorder()
-	app.ServeHTTP(recorder, httptest.NewRequest(http.MethodPut, "/api/runtime-config", body))
+	app.ServeHTTP(recorder, authorizedMutationRequest(http.MethodPut, "/api/runtime-config", body))
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
 	}
@@ -169,10 +169,10 @@ func TestRuntimeConfigEndpointUpdatesAllNameServers(t *testing.T) {
 
 func TestRuntimeConfigEndpointRejectsWrongValueType(t *testing.T) {
 	provider := newRuntimeConfigTestProvider()
-	app := New(AppConfig{Provider: provider, RuntimeConfigEnabled: true, ClusterCacheTTL: time.Hour})
+	app := New(mutationTestAppConfig(t, AppConfig{Provider: provider, RuntimeConfigEnabled: true, ClusterCacheTTL: time.Hour}))
 	body := bytes.NewBufferString(`{"scope":"broker","target":"127.0.0.1:10911","key":"autoCreateTopicEnable","value":"sometimes"}`)
 	recorder := httptest.NewRecorder()
-	app.ServeHTTP(recorder, httptest.NewRequest(http.MethodPut, "/api/runtime-config", body))
+	app.ServeHTTP(recorder, authorizedMutationRequest(http.MethodPut, "/api/runtime-config", body))
 	if recorder.Code != http.StatusBadGateway || !strings.Contains(recorder.Body.String(), "true 或 false") {
 		t.Fatalf("expected typed validation error, got %d body=%s", recorder.Code, recorder.Body.String())
 	}
@@ -182,10 +182,10 @@ func TestRuntimeConfigBatchFailureRollsBackEarlierBroker(t *testing.T) {
 	provider := newRuntimeConfigTestProvider()
 	provider.brokerValues["127.0.0.2:10911"] = map[string]string{"autoCreateTopicEnable": "false"}
 	provider.failUpdateTarget = "127.0.0.2:10911"
-	app := New(AppConfig{Provider: provider, RuntimeConfigEnabled: true, ClusterCacheTTL: time.Hour})
+	app := New(mutationTestAppConfig(t, AppConfig{Provider: provider, RuntimeConfigEnabled: true, ClusterCacheTTL: time.Hour}))
 	body := bytes.NewBufferString(`{"scope":"broker","target":"*","key":"autoCreateTopicEnable","value":"true"}`)
 	recorder := httptest.NewRecorder()
-	app.ServeHTTP(recorder, httptest.NewRequest(http.MethodPut, "/api/runtime-config", body))
+	app.ServeHTTP(recorder, authorizedMutationRequest(http.MethodPut, "/api/runtime-config", body))
 	if recorder.Code != http.StatusBadGateway || !strings.Contains(recorder.Body.String(), "已恢复原值") {
 		t.Fatalf("expected rollback error, got %d body=%s", recorder.Code, recorder.Body.String())
 	}
@@ -200,26 +200,75 @@ func TestRuntimeConfigBatchFailureRollsBackEarlierBroker(t *testing.T) {
 
 func TestRuntimeConfigGetAndProxyActionsExposeManagedState(t *testing.T) {
 	provider := newRuntimeConfigTestProvider()
-	proxy := &fakeProxyRuntime{snapshot: ProxyRuntimeSnapshot{Available: true, Status: "disabled"}}
-	app := New(AppConfig{Provider: provider, RuntimeConfigEnabled: true, ProxyRuntime: proxy, ClusterCacheTTL: time.Hour})
+	proxy := &fakeProxyRuntime{snapshot: ProxyRuntimeSnapshot{
+		Available:                   true,
+		Running:                     true,
+		Healthy:                     true,
+		Status:                      "running",
+		GrpcProbeEndpoint:           "127.0.0.1:8081",
+		GrpcProbeSuccessAtUnixMilli: 1721600000000,
+		GrpcServices:                []string{rocketMQMessagingServiceName},
+	}}
+	app := New(mutationTestAppConfig(t, AppConfig{Provider: provider, RuntimeConfigEnabled: true, ProxyRuntime: proxy, ClusterCacheTTL: time.Hour}))
 
 	getRecorder := httptest.NewRecorder()
 	app.ServeHTTP(getRecorder, httptest.NewRequest(http.MethodGet, "/api/runtime-config", nil))
-	if getRecorder.Code != http.StatusOK || !strings.Contains(getRecorder.Body.String(), `"clusterWritable":true`) {
-		t.Fatalf("unexpected runtime config GET: %d body=%s", getRecorder.Code, getRecorder.Body.String())
+	for _, expected := range []string{
+		`"clusterWritable":true`,
+		`"grpcProbeEndpoint":"127.0.0.1:8081"`,
+		`"grpcProbeSuccessAtUnixMilli":1721600000000`,
+		`"grpcServices":["apache.rocketmq.v2.MessagingService"]`,
+	} {
+		if getRecorder.Code != http.StatusOK || !strings.Contains(getRecorder.Body.String(), expected) {
+			t.Fatalf("runtime config GET missing %s: %d body=%s", expected, getRecorder.Code, getRecorder.Body.String())
+		}
 	}
 
 	applyBody := bytes.NewBufferString(`{"enabled":true,"settings":{"namesrvAddr":"127.0.0.1:9876","grpcServerPort":8081}}`)
 	applyRecorder := httptest.NewRecorder()
-	app.ServeHTTP(applyRecorder, httptest.NewRequest(http.MethodPut, "/api/runtime-config/proxy", applyBody))
+	app.ServeHTTP(applyRecorder, authorizedMutationRequest(http.MethodPut, "/api/runtime-config/proxy", applyBody))
 	if applyRecorder.Code != http.StatusOK || !proxy.applied.Enabled || proxy.applied.Settings["namesrvAddr"] != "127.0.0.1:9876" {
 		t.Fatalf("unexpected proxy apply: code=%d request=%#v body=%s", applyRecorder.Code, proxy.applied, applyRecorder.Body.String())
 	}
 
 	restartRecorder := httptest.NewRecorder()
-	app.ServeHTTP(restartRecorder, httptest.NewRequest(http.MethodPost, "/api/runtime-config/proxy/restart", nil))
+	app.ServeHTTP(restartRecorder, authorizedMutationRequest(http.MethodPost, "/api/runtime-config/proxy/restart", nil))
 	if restartRecorder.Code != http.StatusOK || proxy.restarted != 1 {
 		t.Fatalf("unexpected proxy restart: code=%d count=%d body=%s", restartRecorder.Code, proxy.restarted, restartRecorder.Body.String())
+	}
+}
+
+// TestProxyRuntimeActionsStayWithinSelectedCluster 验证多集群请求只读取和操作对应的 Proxy 运行器。
+func TestProxyRuntimeActionsStayWithinSelectedCluster(t *testing.T) {
+	provider := newRuntimeConfigTestProvider()
+	proxyA := &fakeProxyRuntime{snapshot: ProxyRuntimeSnapshot{Available: true, Status: "disabled"}}
+	proxyB := &fakeProxyRuntime{snapshot: ProxyRuntimeSnapshot{Available: true, Status: "running", Running: true}}
+	app := New(mutationTestAppConfig(t, AppConfig{
+		Provider:             provider,
+		RuntimeConfigEnabled: true,
+		Clusters: []ClusterDefinition{
+			{ID: "cluster-a", Label: "集群 A", NameServer: "ns-a:9876"},
+			{ID: "cluster-b", Label: "集群 B", NameServer: "ns-b:9876"},
+		},
+		ProxyRuntimes: map[string]ProxyRuntime{
+			"cluster-a": proxyA,
+			"cluster-b": proxyB,
+		},
+		ClusterCacheTTL: time.Hour,
+	}))
+
+	read := httptest.NewRecorder()
+	app.ServeHTTP(read, httptest.NewRequest(http.MethodGet, "/api/runtime-config?clusterId=cluster-a", nil))
+	if read.Code != http.StatusOK || !strings.Contains(read.Body.String(), `"status":"disabled"`) {
+		t.Fatalf("unexpected cluster-a proxy state: %d body=%s", read.Code, read.Body.String())
+	}
+	apply := httptest.NewRecorder()
+	app.ServeHTTP(apply, authorizedMutationRequest(http.MethodPut, "/api/runtime-config/proxy?clusterId=cluster-b", bytes.NewBufferString(`{"enabled":true,"settings":{"namesrvAddr":"ns-b:9876","grpcServerPort":8081}}`)))
+	if apply.Code != http.StatusOK {
+		t.Fatalf("expected cluster-b proxy apply success, got %d body=%s", apply.Code, apply.Body.String())
+	}
+	if proxyA.applied.Enabled || !proxyB.applied.Enabled || proxyB.applied.Settings["namesrvAddr"] != "ns-b:9876" {
+		t.Fatalf("proxy operation escaped selected cluster a=%#v b=%#v", proxyA.applied, proxyB.applied)
 	}
 }
 

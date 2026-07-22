@@ -33,12 +33,20 @@
 
         <section class="sidebar-stack">
           <div class="sidebar-block">
+            <label class="sidebar-label" for="clusterSelect">集群</label>
+            <select id="clusterSelect" class="sidebar-select" aria-label="选择固定集群" disabled>
+              <option>加载固定集群</option>
+            </select>
             <span class="sidebar-label">NameServer</span>
             <strong id="nameServer">-</strong>
-            <div class="nameserver-actions">
-              <button id="openNameServerDialog" class="nameserver-open" type="button">添加 / 切换集群</button>
-            </div>
-            <span id="nameServerSwitchStatus" class="sidebar-note">等待配置</span>
+            <span id="clusterSwitchStatus" class="sidebar-note">等待配置</span>
+          </div>
+          <div class="sidebar-block">
+            <label class="sidebar-label" for="authTokenInput">访问令牌</label>
+            <input id="authTokenInput" class="sidebar-input" type="password" autocomplete="off" spellcheck="false" placeholder="Bearer token" />
+            <label class="sidebar-label sidebar-input-label" for="operationReasonInput">操作理由</label>
+            <input id="operationReasonInput" class="sidebar-input" type="text" autocomplete="off" maxlength="240" placeholder="本次变更原因" />
+            <span class="sidebar-note">仅写操作读取，不保存到浏览器</span>
           </div>
           <div class="sidebar-block">
             <span class="sidebar-label">Mode</span>
@@ -57,7 +65,7 @@
             <p class="eyebrow">RocketMQ 控制台</p>
             <h1>集群消息运维台</h1>
             <p class="lead">
-              从 NameServer 进入集群，选择 Topic 后直接浏览保留窗口内的消息，并从消息行跳转到状态链路。
+              选择固定集群后，直接浏览 Topic 保留窗口内的消息，并从消息行跳转到状态链路。
             </p>
           </div>
           <div class="topbar-actions">
@@ -933,40 +941,6 @@
         </section>
       </main>
     </div>
-
-    <dialog id="nameServerDialog" class="nameserver-dialog" aria-labelledby="nameServerDialogTitle">
-      <form id="nameServerForm" class="nameserver-dialog-form">
-        <div class="nameserver-dialog-head">
-          <div>
-            <span class="sidebar-label">Cluster Endpoint</span>
-            <h2 id="nameServerDialogTitle">NameServer 环境</h2>
-          </div>
-          <button id="nameServerDialogClose" class="dialog-close" type="button">关闭</button>
-        </div>
-        <div class="nameserver-field-grid">
-          <label class="nameserver-field">
-            <span>环境名称</span>
-            <input id="nameServerNameInput" name="nameServerName" autocomplete="off" placeholder="生产 / 测试 / 本地" />
-          </label>
-          <label class="nameserver-field">
-            <span>NameServer</span>
-            <input id="nameServerInput" name="nameServer" autocomplete="off" placeholder="host:9876" />
-          </label>
-        </div>
-        <div class="nameserver-choice-head">
-          <span>环境列表</span>
-          <strong id="nameServerChoiceCount">0</strong>
-        </div>
-        <div id="nameServerChoiceList" class="nameserver-choice-list">
-          <button type="button" class="nameserver-choice empty-choice">暂无已添加 NameServer</button>
-        </div>
-        <div class="nameserver-dialog-actions">
-          <span id="nameServerDialogStatus" class="dialog-status">等待输入</span>
-          <button id="nameServerDialogCancel" class="button button-secondary" type="button">取消</button>
-          <button id="nameServerButton" class="button button-primary" type="submit">保存并切换</button>
-        </div>
-      </form>
-    </dialog>
 
     <dialog id="detailDialog" class="detail-dialog" aria-labelledby="detailDialogTitle">
       <div class="detail-dialog-shell">

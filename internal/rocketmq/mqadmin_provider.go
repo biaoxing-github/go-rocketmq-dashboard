@@ -33,23 +33,32 @@ func (f CommandRunnerFunc) Run(ctx context.Context, args ...string) (string, err
 	return f(ctx, args...)
 }
 
+// NativeMessageByOffsetReader 是历史消息浏览专用的原生按位点读取入口。
+// 返回错误时 Provider 会继续调用既有 sidecar/process 命令路径，避免原生实现异常影响浏览。
+type NativeMessageByOffsetReader func(ctx context.Context, topic string, brokerName string, queueID int, offset int64) (MessageDetail, error)
+
+// nativeTopicMessageBrowseWorkers 限制一次历史消息浏览的原生 PullMessage 并发，避免压垮 Broker。
+const nativeTopicMessageBrowseWorkers = 4
+
 // MQAdminProvider 通过 RocketMQ 官方 tools 执行只读管理命令，作为 JVM sidecar 落地前的真实线上 Provider。
 type MQAdminProvider struct {
-	NameServer       string
-	JavaPath         string
-	MavenRepository  string
-	Classpath        string
-	ClasspathFile    string
-	Version          string
-	Timeout          time.Duration
-	CommandRunner    CommandRunner
-	SidecarEnabled   bool
-	SidecarAddr      string
-	SidecarClasspath string
-	SidecarMainClass string
-	SidecarTimeout   time.Duration
-	SidecarTransport CommandRunner
-	MessageCacheTTL  time.Duration
+	NameServer      string
+	JavaPath        string
+	MavenRepository string
+	Classpath       string
+	ClasspathFile   string
+	Version         string
+	Timeout         time.Duration
+	CommandRunner   CommandRunner
+	// NativeMessageByOffset 只服务 Topic 历史消息浏览；其失败会回退到既有命令通道。
+	NativeMessageByOffset NativeMessageByOffsetReader
+	SidecarEnabled        bool
+	SidecarAddr           string
+	SidecarClasspath      string
+	SidecarMainClass      string
+	SidecarTimeout        time.Duration
+	SidecarTransport      CommandRunner
+	MessageCacheTTL       time.Duration
 	// TopicMetadataCacheTTL 控制 exportMetadata 结果缓存时间，Dashboard 内写操作会主动清空缓存。
 	TopicMetadataCacheTTL time.Duration
 
@@ -278,13 +287,45 @@ func (p *MQAdminProvider) topicMessages(ctx context.Context, query MessageBrowse
 		return TopicMessages{}, errors.New("未找到可浏览的 Topic 队列")
 	}
 
-	return collectTopicMessagesByOffset(ctx, query, rows, previous, p.messageByOffset)
+	if p.NativeMessageByOffset == nil {
+		return collectTopicMessagesByOffset(ctx, query, rows, previous, p.messageByOffset)
+	}
+	return collectTopicMessagesByOffsetWithWorkers(ctx, query, rows, previous, p.nativeTopicMessageByOffset, nativeTopicMessageBrowseWorkers)
 }
 
 type messageByOffsetFunc func(ctx context.Context, topic string, brokerName string, queueID int, offset int64) (MessageDetail, error)
 
 // collectTopicMessagesByOffset 按 topicStatus 位点倒序收集消息，并复用旧快照中已经回查过的 offset。
 func collectTopicMessagesByOffset(ctx context.Context, query MessageBrowseQuery, rows []TopicStatusRow, previous TopicMessages, messageByOffset messageByOffsetFunc) (TopicMessages, error) {
+	return collectTopicMessagesByOffsetWithWorkers(ctx, query, rows, previous, messageByOffset, 1)
+}
+
+// messageByOffsetWork 描述一个尚未命中快照缓存的 Broker 队列位点读取任务。
+type messageByOffsetWork struct {
+	slot       int
+	brokerName string
+	queueID    int
+	offset     int64
+}
+
+// messageByOffsetSlot 以扫描顺序保存缓存或 worker 的读取结果，保证并发后仍可稳定归并。
+type messageByOffsetSlot struct {
+	message    MessageDetail
+	work       messageByOffsetWork
+	resolved   bool
+	needsFetch bool
+	err        error
+}
+
+// messageByOffsetOutcome 是单个 worker 完成一个位点读取后返回给归并线程的结果。
+type messageByOffsetOutcome struct {
+	slot    int
+	message MessageDetail
+	err     error
+}
+
+// collectTopicMessagesByOffsetWithWorkers 按既有位点扫描顺序归并读取结果，并将真实回源限制在指定 worker 数量内。
+func collectTopicMessagesByOffsetWithWorkers(ctx context.Context, query MessageBrowseQuery, rows []TopicStatusRow, previous TopicMessages, messageByOffset messageByOffsetFunc, workerCount int) (TopicMessages, error) {
 	query = normalizeBrowseQuery(query)
 	cachedMessages := previousTopicMessagesByOffset(previous)
 	result := TopicMessages{
@@ -295,6 +336,8 @@ func collectTopicMessagesByOffset(ctx context.Context, query MessageBrowseQuery,
 		Rows:       make([]MessageDetail, 0, query.Limit),
 		Warnings:   make([]string, 0),
 	}
+	slots := make([]messageByOffsetSlot, 0, query.Limit)
+	works := make([]messageByOffsetWork, 0, query.Limit)
 	perQueueLimit := perQueueBrowseLimit(query.Limit, len(rows))
 	for _, row := range rows {
 		scannedInQueue := 0
@@ -304,16 +347,59 @@ func collectTopicMessagesByOffset(ctx context.Context, query MessageBrowseQuery,
 			cacheKey := messageOffsetCacheKey(query.Topic, row.BrokerName, row.QueueID, offset)
 			if cached, ok := cachedMessages[cacheKey]; ok {
 				result.ReusedOffsets++
-				result.Rows = append(result.Rows, cached)
+				slots = append(slots, messageByOffsetSlot{message: cached, resolved: true})
 				continue
 			}
 			result.FetchedOffsets++
-			message, err := messageByOffset(ctx, query.Topic, row.BrokerName, row.QueueID, offset)
-			if err != nil {
-				result.Warnings = append(result.Warnings, fmt.Sprintf("%s/%d/%d: %s", row.BrokerName, row.QueueID, offset, err.Error()))
-				continue
+			work := messageByOffsetWork{
+				slot:       len(slots),
+				brokerName: row.BrokerName,
+				queueID:    row.QueueID,
+				offset:     offset,
 			}
-			result.Rows = append(result.Rows, message)
+			slots = append(slots, messageByOffsetSlot{work: work, needsFetch: true})
+			works = append(works, work)
+		}
+	}
+	if len(works) > 0 {
+		if workerCount < 1 {
+			workerCount = 1
+		}
+		if workerCount > len(works) {
+			workerCount = len(works)
+		}
+		workCh := make(chan messageByOffsetWork)
+		outcomeCh := make(chan messageByOffsetOutcome, len(works))
+		var workers sync.WaitGroup
+		for worker := 0; worker < workerCount; worker++ {
+			workers.Add(1)
+			go func() {
+				defer workers.Done()
+				for work := range workCh {
+					message, err := messageByOffset(ctx, query.Topic, work.brokerName, work.queueID, work.offset)
+					outcomeCh <- messageByOffsetOutcome{slot: work.slot, message: message, err: err}
+				}
+			}()
+		}
+		for _, work := range works {
+			workCh <- work
+		}
+		close(workCh)
+		workers.Wait()
+		close(outcomeCh)
+		for outcome := range outcomeCh {
+			slots[outcome.slot].message = outcome.message
+			slots[outcome.slot].resolved = outcome.err == nil
+			slots[outcome.slot].err = outcome.err
+		}
+	}
+	for _, slot := range slots {
+		if slot.needsFetch && slot.err != nil {
+			result.Warnings = append(result.Warnings, fmt.Sprintf("%s/%d/%d: %s", slot.work.brokerName, slot.work.queueID, slot.work.offset, slot.err.Error()))
+			continue
+		}
+		if slot.resolved {
+			result.Rows = append(result.Rows, slot.message)
 		}
 	}
 	sort.SliceStable(result.Rows, func(left int, right int) bool {
@@ -840,10 +926,35 @@ func (p *MQAdminProvider) messageByOffset(ctx context.Context, topic string, bro
 	if err != nil {
 		return MessageDetail{}, err
 	}
+	return withMessageOffsetLocation(message, brokerName, queueID, offset), nil
+}
+
+// nativeTopicMessageByOffset 优先走原生 PullMessage 读取；出现错误时保留既有 sidecar/process 回退语义。
+func (p *MQAdminProvider) nativeTopicMessageByOffset(ctx context.Context, topic string, brokerName string, queueID int, offset int64) (MessageDetail, error) {
+	reader := p.NativeMessageByOffset
+	if reader == nil {
+		return p.messageByOffset(ctx, topic, brokerName, queueID, offset)
+	}
+	message, nativeErr := reader(ctx, topic, brokerName, queueID, offset)
+	if nativeErr == nil && strings.TrimSpace(message.MessageID) != "" {
+		return withMessageOffsetLocation(message, brokerName, queueID, offset), nil
+	}
+	if nativeErr == nil {
+		nativeErr = errors.New("原生 queryMsgByOffset 未返回消息")
+	}
+	fallbackMessage, fallbackErr := p.messageByOffset(ctx, topic, brokerName, queueID, offset)
+	if fallbackErr != nil {
+		return MessageDetail{}, fmt.Errorf("原生 queryMsgByOffset 失败: %v; mqadmin 回退失败: %w", nativeErr, fallbackErr)
+	}
+	return fallbackMessage, nil
+}
+
+// withMessageOffsetLocation 以当前浏览请求的队列位置覆盖读取结果，保证缓存键和消息链路查询一致。
+func withMessageOffsetLocation(message MessageDetail, brokerName string, queueID int, offset int64) MessageDetail {
 	message.BrokerName = brokerName
 	message.QueueID = queueID
 	message.QueueOffset = offset
-	return message, nil
+	return message
 }
 
 func (p *MQAdminProvider) consumerConnection(ctx context.Context, group string) (ConsumerConnectionSnapshot, error) {

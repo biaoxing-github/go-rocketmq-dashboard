@@ -2,6 +2,7 @@
 const state = {
   config: null,
   health: null,
+  selectedClusterId: "",
   clusters: [],
   features: null,
   lastFeaturePayload: null,
@@ -50,13 +51,23 @@ const state = {
   consumerOffsetResetAutoGroup: "",
   consumerOffsetResetAutoTopic: "",
   lastConsumerOffsetResetResult: null,
-  nameServerEnvironments: [],
   lastRefreshTriggerText: "",
   snapshotPollTimer: null,
   snapshotPollCount: 0
 };
 
-const NAME_SERVER_STORAGE_KEY = "rmqdash.nameServers";
+// CLUSTER_STORAGE_KEY 只保存用户最近选择的固定集群标识，不保存 NameServer、令牌或操作理由。
+const CLUSTER_STORAGE_KEY = "rmqdash.clusterId";
+
+// AUDITED_MUTATION_PATHS 列出会改变 RocketMQ 或 Proxy 运行状态、因而需要身份和审计原因的接口。
+const AUDITED_MUTATION_PATHS = new Set([
+  "/api/topics",
+  "/api/topic-messages/send",
+  "/api/consumer-offset/reset",
+  "/api/runtime-config",
+  "/api/runtime-config/proxy",
+  "/api/runtime-config/proxy/restart"
+]);
 
 const RUNTIME_CONFIG_ENUMS = {
   brokerrole: ["ASYNC_MASTER", "SYNC_MASTER", "SLAVE"],
@@ -78,19 +89,40 @@ const RUNTIME_CONFIG_RESTART_KEYS = new Set([
 // $ 是页面内最小化的选择器助手，减少重复书写 document.querySelector。
 const $ = (selector) => document.querySelector(selector);
 
-// fetchJSON 统一封装 JSON 请求和错误提取，保证所有 API 入口展示一致的异常信息。
+// fetchJSON 统一绑定固定 clusterId，并仅为审计写操作附加临时身份和理由。
 async function fetchJSON(url, options = {}) {
+  const { clusterId, ...requestOptions } = options;
+  const method = String(requestOptions.method || "GET").toUpperCase();
+  const headers = {
+    Accept: "application/json",
+    ...(requestOptions.headers || {})
+  };
+  if (isClusterScopedAPI(url)) {
+    const requestedClusterId = requestClusterId(url, clusterId);
+    if (!requestedClusterId) {
+      throw new Error("请先选择集群");
+    }
+    headers["X-RMQD-Cluster-ID"] = requestedClusterId;
+  }
+  if (isAuditedMutationAPI(url, method)) {
+    const token = String($("#authTokenInput")?.value || "").trim();
+    const reason = String($("#operationReasonInput")?.value || "").trim();
+    if (!token) {
+      throw new Error("写操作需要访问令牌");
+    }
+    if (!reason) {
+      throw new Error("写操作需要填写操作理由");
+    }
+    headers.Authorization = `Bearer ${token}`;
+    headers["X-RMQD-Operation-Reason"] = reason;
+  }
   let response;
   try {
     response = await fetch(url, {
-      ...options,
-      headers: {
-        Accept: "application/json",
-        ...(options.headers || {})
-      }
+      ...requestOptions,
+      headers
     });
   } catch (error) {
-    const method = String(options.method || "GET").toUpperCase();
     const writeWarning = method === "GET" || method === "HEAD"
       ? ""
       : " 请求结果未知，请先查询确认，避免重复操作。";
@@ -102,6 +134,39 @@ async function fetchJSON(url, options = {}) {
     throw new Error(payload.message || `请求失败: ${response.status}`);
   }
   return payload;
+}
+
+// apiPath 统一提取相对或绝对 API 地址的路径，以便判断请求的集群和审计边界。
+function apiPath(url) {
+  try {
+    return new URL(String(url), window.location.origin).pathname;
+  } catch {
+    return String(url).split("?", 1)[0];
+  }
+}
+
+// isClusterScopedAPI 排除固定集群定义接口，其余 API 请求都必须携带稳定 clusterId。
+function isClusterScopedAPI(url) {
+  const path = apiPath(url);
+  return path.startsWith("/api/") && path !== "/api/config";
+}
+
+// requestClusterId 优先尊重调用方 query 参数，再使用显式参数或当前选择，避免双来源冲突。
+function requestClusterId(url, requestedClusterId) {
+  try {
+    const queryClusterId = new URL(String(url), window.location.origin).searchParams.get("clusterId");
+    if (queryClusterId) {
+      return queryClusterId.trim();
+    }
+  } catch {
+    // 相对路径解析失败时继续使用当前已选集群。
+  }
+  return String(requestedClusterId || state.selectedClusterId || "").trim();
+}
+
+// isAuditedMutationAPI 只拦截会改变 RocketMQ 或 Proxy 状态的请求，刷新快照不要求写操作凭据。
+function isAuditedMutationAPI(url, method) {
+  return method !== "GET" && method !== "HEAD" && AUDITED_MUTATION_PATHS.has(apiPath(url));
 }
 
 // setLoading 控制按钮加载态，防止重复提交和重复刷新。
@@ -294,190 +359,121 @@ function setSubtab(group, target) {
   }
 }
 
-// renderCurrentNameServerLabel 在侧栏同时展示自定义环境名和真实 NameServer 地址。
-function renderCurrentNameServerLabel() {
-  const current = currentNameServer();
-  const environment = findNameServerEnvironment(current);
-  const label = environment && environment.name !== environment.address
-    ? `${environment.name} · ${environment.address}`
-    : current;
-  $("#nameServer").textContent = label || "-";
+// configuredDashboardClusters 返回服务启动时固定的集群定义，浏览器不能添加或改写该列表。
+function configuredDashboardClusters() {
+  const clusters = state.config?.clusters;
+  return Array.isArray(clusters) ? clusters.filter((cluster) => String(cluster?.id || "").trim()) : [];
 }
 
-// renderHealth 把后端 health 信息写入侧栏，让 NameServer 和运行模式一眼可见。
-function renderHealth(payload) {
-  state.health = payload.data || {};
-  renderCurrentNameServerLabel();
-  $("#serviceMode").textContent = state.health.mode || "-";
-  $("#latencyBudget").textContent = `${state.health.latencyBudgetMillis ?? "-"} ms`;
-  renderNameServerOptions();
+// selectedDashboardCluster 从当前稳定 clusterId 找到对应的固定定义。
+function selectedDashboardCluster() {
+  const selectedClusterId = String(state.selectedClusterId || "").trim();
+  return configuredDashboardClusters().find((cluster) => cluster.id === selectedClusterId) || null;
 }
 
-// loadHealth 只拉取服务健康信息，不和快照刷新混在一起，降低首屏耦合。
-async function loadHealth() {
-  const payload = await fetchJSON("/api/health");
-  renderHealth(payload);
-}
-
-// renderConfig 把后端当前运行配置写入侧栏表单，确保切换 NameServer 有明确的当前态。
-function renderConfig(payload) {
-  state.config = payload.data || {};
-  const current = state.config.nameServer || "";
-  const currentEnvironment = findNameServerEnvironment(current);
-  renderCurrentNameServerLabel();
-  $("#nameServerInput").value = current;
-  $("#nameServerNameInput").value = nameServerInputName(currentEnvironment);
-  renderNameServerOptions();
-  $("#nameServerSwitchStatus").textContent = current ? "当前连接" : "未配置";
-  $("#nameServerDialogStatus").textContent = current ? "当前连接" : "等待输入";
-}
-
-// readStoredNameServerEnvironments 读取浏览器里保存的命名环境，并兼容旧版纯地址数组。
-function readStoredNameServerEnvironments() {
+// rememberedClusterID 仅恢复本浏览器会话中的选择，不持久化令牌、理由或任意连接地址。
+function rememberedClusterID() {
   try {
-    const parsed = JSON.parse(window.localStorage.getItem(NAME_SERVER_STORAGE_KEY) || "[]");
-    return mergeNameServerEnvironments(Array.isArray(parsed) ? parsed : []);
+    return String(window.sessionStorage.getItem(CLUSTER_STORAGE_KEY) || "").trim();
   } catch {
-    return [];
-  }
-}
-
-// writeStoredNameServerEnvironments 保存命名环境，下一次打开页面仍可直接按名称切换。
-function writeStoredNameServerEnvironments(values) {
-  try {
-    window.localStorage.setItem(NAME_SERVER_STORAGE_KEY, JSON.stringify(mergeNameServerEnvironments(values)));
-  } catch {
-    $("#nameServerDialogStatus").textContent = "本地列表保存失败";
-  }
-}
-
-// normalizeNameServerEnvironment 把旧字符串和新对象统一成可渲染的环境条目。
-function normalizeNameServerEnvironment(value) {
-  if (typeof value === "string") {
-    const address = value.trim();
-    return address ? { name: address, address } : null;
-  }
-  if (!value || typeof value !== "object") {
-    return null;
-  }
-  const address = String(value.address || value.nameServer || value.value || "").trim();
-  if (!address) {
-    return null;
-  }
-  const name = String(value.name || value.label || "").trim() || address;
-  return { name, address };
-}
-
-// mergeNameServerEnvironments 按地址去重，并保留用户保存过的自定义名称。
-function mergeNameServerEnvironments(...groups) {
-  const byAddress = new Map();
-  for (const group of groups) {
-    for (const value of group || []) {
-      const environment = normalizeNameServerEnvironment(value);
-      if (!environment) {
-        continue;
-      }
-      const existing = byAddress.get(environment.address);
-      if (!existing) {
-        byAddress.set(environment.address, environment);
-        continue;
-      }
-      if (existing.name === existing.address && environment.name !== environment.address) {
-        existing.name = environment.name;
-      }
-    }
-  }
-  return Array.from(byAddress.values());
-}
-
-function currentNameServer() {
-  return state.config?.nameServer || state.health?.nameServer || "";
-}
-
-function configuredNameServers() {
-  return mergeNameServerEnvironments(
-    state.config?.availableNameServers || [],
-    state.health?.availableNameServers || []
-  );
-}
-
-function getNameServerEnvironments() {
-  const current = currentNameServer();
-  const currentEntry = current ? [{ address: current, name: current }] : [];
-  return mergeNameServerEnvironments(
-    currentEntry,
-    readStoredNameServerEnvironments(),
-    configuredNameServers()
-  );
-}
-
-function findNameServerEnvironment(address) {
-  const trimmed = String(address || "").trim();
-  if (!trimmed) {
-    return null;
-  }
-  return getNameServerEnvironments().find((environment) => environment.address === trimmed) || null;
-}
-
-function nameServerInputName(environment) {
-  if (!environment || environment.name === environment.address) {
     return "";
   }
-  return environment.name;
 }
 
-function rememberNameServerEnvironment(nameServer, name, extraNameServers = []) {
-  const address = String(nameServer || "").trim();
-  if (!address) {
-    return;
+// rememberClusterID 只把已由服务端验证过的固定 clusterId 留在当前会话。
+function rememberClusterID(clusterId) {
+  try {
+    window.sessionStorage.setItem(CLUSTER_STORAGE_KEY, clusterId);
+  } catch {
+    // 会话存储不可用不会影响当前页面继续使用已选择集群。
   }
-  const saved = mergeNameServerEnvironments(
-    [{ address, name: String(name || "").trim() || address }],
-    extraNameServers,
-    readStoredNameServerEnvironments()
-  );
-  writeStoredNameServerEnvironments(saved);
-  state.nameServerEnvironments = saved;
 }
 
-function renderNameServerOptions() {
-  const list = $("#nameServerChoiceList");
-  if (!list) {
-    return;
+// ensureSelectedDashboardCluster 从当前选择、会话选择和服务端排序中确定唯一有效集群。
+function ensureSelectedDashboardCluster() {
+  const clusters = configuredDashboardClusters();
+  const current = String(state.selectedClusterId || "").trim();
+  const remembered = rememberedClusterID();
+  const selected = clusters.find((cluster) => cluster.id === current)
+    || clusters.find((cluster) => cluster.id === remembered)
+    || clusters[0]
+    || null;
+  state.selectedClusterId = selected?.id || "";
+  if (selected) {
+    rememberClusterID(selected.id);
   }
-  const current = currentNameServer();
-  const environments = getNameServerEnvironments();
-  state.nameServerEnvironments = environments;
-  $("#nameServerChoiceCount").textContent = String(environments.length);
-  if (!environments.length) {
-    list.innerHTML = `<button type="button" class="nameserver-choice empty-choice" disabled>暂无已添加 NameServer</button>`;
-    return;
-  }
-  list.innerHTML = environments.map((environment) => {
-    const active = environment.address === current;
-    return `
-      <button class="nameserver-choice ${active ? "active" : ""}" type="button" data-name-server-choice="${escapeAttr(environment.address)}" data-name-server-name="${escapeAttr(nameServerInputName(environment))}">
-        <span class="nameserver-choice-main">
-          <strong>${escapeHTML(environment.name)}</strong>
-          <em>${escapeHTML(environment.address)}</em>
-        </span>
-        <small>${active ? "当前连接" : "点击切换"}</small>
-      </button>
-    `;
+  return selected;
+}
+
+// renderClusterSelection 把服务端固定集群定义渲染为本地选择控件，不再提供 NameServer 写入入口。
+function renderClusterSelection() {
+  const select = $("#clusterSelect");
+  const selected = ensureSelectedDashboardCluster();
+  const clusters = configuredDashboardClusters();
+  select.innerHTML = clusters.map((cluster) => {
+    const label = cluster.label || cluster.id;
+    return `<option value="${escapeAttr(cluster.id)}">${escapeHTML(label)} · ${escapeHTML(cluster.nameServer || "-")}</option>`;
   }).join("");
-  list.querySelectorAll("[data-name-server-choice]").forEach((button) => {
-    button.addEventListener("click", () => {
-      const nextNameServer = button.dataset.nameServerChoice || "";
-      const nextNameServerName = button.dataset.nameServerName || "";
-      $("#nameServerInput").value = nextNameServer;
-      $("#nameServerNameInput").value = nextNameServerName;
-      if (nextNameServer === currentNameServer()) {
-        $("#nameServerDialogStatus").textContent = "当前连接";
-        return;
-      }
-      switchNameServer(nextNameServer, nextNameServerName);
-    });
-  });
+  select.disabled = clusters.length === 0;
+  select.value = selected?.id || "";
+  $("#nameServer").textContent = state.health?.nameServer || selected?.nameServer || "-";
+  $("#clusterSwitchStatus").textContent = selected
+    ? `当前集群 · ${selected.label || selected.id}`
+    : "未配置固定集群";
+}
+
+// renderHealth 把当前 clusterId 的健康信息写入侧栏，避免名称和实际 NameServer 脱节。
+function renderHealth(payload) {
+  state.health = payload.data || {};
+  $("#nameServer").textContent = state.health.nameServer || selectedDashboardCluster()?.nameServer || "-";
+  $("#serviceMode").textContent = state.health.mode || "-";
+  $("#latencyBudget").textContent = `${state.health.latencyBudgetMillis ?? "-"} ms`;
+  $("#clusterSwitchStatus").textContent = "已连接";
+}
+
+// loadHealth 读取指定固定集群的服务信息；旧请求完成后不会覆盖新选择的侧栏。
+async function loadHealth(options = {}) {
+  const clusterId = String(options.clusterId || state.selectedClusterId || "").trim();
+  const payload = await fetchJSON("/api/health", { clusterId });
+  if (clusterId === state.selectedClusterId) {
+    renderHealth(payload);
+  }
+  return payload;
+}
+
+// renderConfig 接收只读集群定义并确定首次可用的本地选择。
+function renderConfig(payload) {
+  state.config = payload.data || {};
+  renderClusterSelection();
+}
+
+// switchDashboardCluster 只切换当前浏览器请求携带的 clusterId，重置跨集群选择并并行加载新快照。
+async function switchDashboardCluster(nextClusterId) {
+  const selected = configuredDashboardClusters().find((cluster) => cluster.id === String(nextClusterId || "").trim());
+  if (!selected) {
+    $("#clusterSwitchStatus").textContent = "未知集群";
+    return;
+  }
+  if (selected.id === state.selectedClusterId) {
+    renderClusterSelection();
+    return;
+  }
+  state.selectedClusterId = selected.id;
+  state.health = null;
+  rememberClusterID(selected.id);
+  resetRuntimeSelections();
+  renderClusterSelection();
+  $("#clusterSwitchStatus").textContent = "加载中";
+  const [healthResult] = await Promise.allSettled([
+    loadHealth({ clusterId: selected.id }),
+    loadSnapshots({ manageButton: false, clusterId: selected.id })
+  ]);
+  if (state.selectedClusterId !== selected.id) {
+    return;
+  }
+  if (healthResult.status === "rejected") {
+    $("#clusterSwitchStatus").textContent = `健康检查失败 · ${errorMessage(healthResult.reason)}`;
+  }
 }
 
 async function loadConfig() {
@@ -485,121 +481,105 @@ async function loadConfig() {
   renderConfig(payload);
 }
 
-function openNameServerDialog() {
-  const current = currentNameServer();
-  const currentEnvironment = findNameServerEnvironment(current);
-  $("#nameServerInput").value = current;
-  $("#nameServerNameInput").value = nameServerInputName(currentEnvironment);
-  $("#nameServerDialogStatus").textContent = current ? "当前连接" : "等待输入";
-  renderNameServerOptions();
-  $("#nameServerDialog").showModal();
-  window.setTimeout(() => $("#nameServerNameInput").focus(), 0);
+// currentNameServer 优先显示当前 clusterId 的实时健康结果，缺失时回退到固定定义。
+function currentNameServer() {
+  return state.health?.nameServer || selectedDashboardCluster()?.nameServer || "";
 }
 
-function closeNameServerDialog() {
-  const dialog = $("#nameServerDialog");
-  if (dialog.open) {
-    dialog.close();
+// handleClusterSelectionChange 只变更本地请求上下文，不会修改服务端 Provider 或其他用户视图。
+function handleClusterSelectionChange(event) {
+  switchDashboardCluster(event.target.value);
+}
+
+// errorMessage 将浏览器异常、服务错误和未知拒绝统一成可展示的简短文本。
+function errorMessage(error) {
+  if (error instanceof Error && error.message) {
+    return error.message;
+  }
+  return String(error || "未知错误");
+}
+
+// failedSnapshotPayload 保留与服务端快照一致的元信息形状，让总览可单独表达局部失败。
+function failedSnapshotPayload(error) {
+  return {
+    data: null,
+    cacheHit: false,
+    refreshing: false,
+    stale: false,
+    lastError: errorMessage(error)
+  };
+}
+
+// renderSnapshotFailure 只标记失败区域，保留同轮或上一轮其他区域的可用数据。
+function renderSnapshotFailure(statusSelector, error) {
+  const status = $(statusSelector);
+  if (status) {
+    status.textContent = `读取失败 · ${errorMessage(error)}`;
   }
 }
 
-function setNameServerDialogBusy(loading) {
-  document
-    .querySelectorAll("#nameServerButton, #nameServerDialogClose, #nameServerDialogCancel, [data-name-server-choice]")
-    .forEach((button) => setLoading(button, loading));
-}
-
-// handleNameServerSubmit 切换后端运行时 NameServer，并清空前端选择态重新拉取新集群快照。
-async function handleNameServerSubmit(event) {
-  event.preventDefault();
-  const nextNameServer = $("#nameServerInput").value.trim();
-  const nextNameServerName = $("#nameServerNameInput").value.trim();
-  await switchNameServer(nextNameServer, nextNameServerName);
-}
-
-// switchNameServer 复用后端运行时配置接口，弹窗只负责收集和记住用户输入。
-async function switchNameServer(nextNameServer, nextNameServerName = "") {
-  if (!nextNameServer) {
-    $("#nameServerSwitchStatus").textContent = "NameServer 必填";
-    $("#nameServerDialogStatus").textContent = "NameServer 必填";
-    return;
-  }
-  const previousNameServer = currentNameServer();
-  if (nextNameServer === previousNameServer) {
-    rememberNameServerEnvironment(nextNameServer, nextNameServerName, configuredNameServers());
-    renderCurrentNameServerLabel();
-    renderNameServerOptions();
-    $("#nameServerSwitchStatus").textContent = "已保存";
-    $("#nameServerDialogStatus").textContent = "已保存";
-    closeNameServerDialog();
-    return;
-  }
-  setNameServerDialogBusy(true);
-  $("#nameServerSwitchStatus").textContent = "切换中";
-  $("#nameServerDialogStatus").textContent = "切换中";
-  try {
-    const payload = await fetchJSON("/api/config", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ nameServer: nextNameServer })
-    });
-    rememberNameServerEnvironment(nextNameServer, nextNameServerName, [
-      previousNameServer,
-      ...(payload.data?.availableNameServers || [])
-    ]);
-    renderConfig(payload);
-    resetRuntimeSelections();
-    $("#nameServerSwitchStatus").textContent = "已切换";
-    $("#nameServerDialogStatus").textContent = "已切换";
-    closeNameServerDialog();
-    await loadHealth();
-    await loadSnapshots({ manageButton: false });
-  } catch (error) {
-    $("#nameServerSwitchStatus").textContent = error.message;
-    $("#nameServerDialogStatus").textContent = error.message;
-  } finally {
-    setNameServerDialogBusy(false);
-    renderNameServerOptions();
-  }
-}
-
-// loadSnapshots 并行拉取核心只读快照和运行配置状态，尽量把首屏响应压进一个 RTT。
+// loadSnapshots 为每个首页区域独立收集请求结果，避免一个慢或失败接口中断整个控制台。
 async function loadSnapshots(options = {}) {
   const manageButton = options.manageButton !== false;
+  const clusterId = String(options.clusterId || state.selectedClusterId || "").trim();
   const button = $("#refreshButton");
   if (manageButton) {
     setLoading(button, true);
   }
   $("#snapshotState").textContent = "加载中";
+  const sections = [
+    {
+      statusSelector: "#clusterStatus",
+      load: () => fetchJSON("/api/clusters", { clusterId }),
+      render: (payload) => {
+        state.clusters = payload.data || [];
+        renderClusters(payload);
+      }
+    },
+    {
+      statusSelector: "#featureStatus",
+      load: () => fetchJSON("/api/features", { clusterId }),
+      render: (payload) => renderFeatures(payload)
+    },
+    {
+      statusSelector: "#topicStatus",
+      load: () => fetchJSON("/api/topics", { clusterId }),
+      render: (payload) => {
+        state.topics = payload.data || [];
+        renderTopics(payload);
+      }
+    },
+    {
+      statusSelector: "#consumerStatus",
+      load: () => fetchJSON("/api/consumers", { clusterId }),
+      render: (payload) => {
+        state.consumers = payload.data || [];
+        renderConsumers(payload);
+      }
+    },
+    {
+      statusSelector: "#runtimeConfigStatus",
+      load: () => fetchJSON("/api/runtime-config", { clusterId }),
+      render: (payload) => renderRuntimeConfig(payload)
+    }
+  ];
   try {
-    const [clusterPayload, featurePayload, topicPayload, consumerPayload, runtimeConfigPayload] = await Promise.all([
-      fetchJSON("/api/clusters"),
-      fetchJSON("/api/features"),
-      fetchJSON("/api/topics"),
-      fetchJSON("/api/consumers"),
-      fetchJSON("/api/runtime-config")
-    ]);
-    state.clusters = clusterPayload.data || [];
-    state.features = featurePayload.data || null;
-    state.lastFeaturePayload = featurePayload;
-    state.topics = topicPayload.data || [];
-    state.consumers = consumerPayload.data || [];
-    state.lastConsumerPayload = consumerPayload;
-    state.runtimeConfig = runtimeConfigPayload.data || null;
-    renderRuntimeConfig(runtimeConfigPayload);
-    renderClusters(clusterPayload);
-    renderFeatures(featurePayload);
-    renderTopics(topicPayload);
-    renderConsumers(consumerPayload);
+    const results = await Promise.allSettled(sections.map((section) => section.load()));
+    if (clusterId !== state.selectedClusterId) {
+      return;
+    }
+    const payloads = results.map((result, index) => {
+      const section = sections[index];
+      if (result.status === "rejected") {
+        renderSnapshotFailure(section.statusSelector, result.reason);
+        return failedSnapshotPayload(result.reason);
+      }
+      section.render(result.value);
+      return result.value;
+    });
+    const [clusterPayload, featurePayload, topicPayload, consumerPayload] = payloads;
     renderOverview(clusterPayload, featurePayload, topicPayload, consumerPayload);
-    scheduleSnapshotPoll(clusterPayload, featurePayload, topicPayload, consumerPayload);
-  } catch (error) {
-    $("#clusterStatus").textContent = error.message;
-    $("#featureStatus").textContent = error.message;
-    $("#topicStatus").textContent = error.message;
-    $("#consumerStatus").textContent = error.message;
-    $("#runtimeConfigStatus").textContent = error.message;
-    $("#snapshotState").textContent = "异常";
+    scheduleSnapshotPoll(clusterId, clusterPayload, featurePayload, topicPayload, consumerPayload);
   } finally {
     if (manageButton) {
       setLoading(button, false);
@@ -610,14 +590,18 @@ async function loadSnapshots(options = {}) {
 // forceRefreshSnapshots 先强制启动线上快照刷新，再读取当前快照状态，避免按钮只读缓存造成误解。
 async function forceRefreshSnapshots() {
   const button = $("#refreshButton");
+  const clusterId = String(state.selectedClusterId || "").trim();
   setLoading(button, true);
   $("#snapshotState").textContent = "刷新中";
   try {
-    const payload = await fetchJSON("/api/refresh", { method: "POST" });
+    const payload = await fetchJSON("/api/refresh", { method: "POST", clusterId });
+    if (clusterId !== state.selectedClusterId) {
+      return;
+    }
     state.lastRefreshTriggerText = refreshTriggerText(payload.data || {});
     state.snapshotPollCount = 0;
     $("#snapshotMeta").textContent = state.lastRefreshTriggerText;
-    await loadSnapshots({ manageButton: false });
+    await loadSnapshots({ manageButton: false, clusterId });
   } catch (error) {
     $("#snapshotState").textContent = "异常";
     $("#snapshotMeta").textContent = error.message;
@@ -626,8 +610,8 @@ async function forceRefreshSnapshots() {
   }
 }
 
-// scheduleSnapshotPoll 只在后台刷新未完成时短暂追读快照，避免首屏长期停在 Consumer=0。
-function scheduleSnapshotPoll(...payloads) {
+// scheduleSnapshotPoll 只在当前固定集群仍有后台刷新时短暂追读，避免旧集群轮询覆盖新选择。
+function scheduleSnapshotPoll(clusterId, ...payloads) {
   const refreshing = payloads.some((payload) => payload.refreshing);
   if (!refreshing) {
     state.snapshotPollCount = 0;
@@ -639,7 +623,9 @@ function scheduleSnapshotPoll(...payloads) {
   state.snapshotPollCount += 1;
   state.snapshotPollTimer = window.setTimeout(async () => {
     state.snapshotPollTimer = null;
-    await loadSnapshots({ manageButton: false });
+    if (clusterId === state.selectedClusterId) {
+      await loadSnapshots({ manageButton: false, clusterId });
+    }
   }, 1500);
 }
 
@@ -750,11 +736,16 @@ function renderRuntimeConfig(payload) {
   $("#proxyRuntimeRestart").disabled = !proxyWritable || !proxy.enabled;
   $("#proxyRuntimeSummary").innerHTML = `
     <div><span>gRPC Proxy</span><strong>${escapeHTML(proxy.enabled ? "开启" : "关闭")}</strong></div>
-    <div><span>进程</span><strong><span class="pill ${proxyRuntimePillClass(proxy.status)}">${escapeHTML(proxyRuntimeStatusText(proxy.status))}</span></strong></div>
+    <div><span>进程</span><strong><span class="pill ${proxy.running ? "pill-ok" : proxyRuntimePillClass(proxy.status)}">${escapeHTML(proxy.running ? "运行中" : proxyRuntimeStatusText(proxy.status))}</span></strong></div>
+    <div><span>gRPC 就绪</span><strong><span class="pill ${proxy.healthy ? "pill-ok" : proxy.enabled ? "pill-warn" : "pill-muted"}">${escapeHTML(proxy.healthy ? "Reflection 可用" : proxy.enabled ? "Reflection 未就绪" : "未启用")}</span></strong></div>
     <div><span>对外 gRPC</span><strong class="mono runtime-endpoint-external">${escapeHTML(proxy.grpcExternalEndpoint || "-")}</strong></div>
     <div><span>对外 Remoting</span><strong class="mono runtime-endpoint-external">${escapeHTML(proxy.remotingExternalEndpoint || "-")}</strong></div>
     <div><span>容器 gRPC</span><strong class="mono">${escapeHTML(proxy.grpcEndpoint || "-")}</strong></div>
     <div><span>容器 Remoting</span><strong class="mono">${escapeHTML(proxy.remotingEndpoint || "-")}</strong></div>
+    <div><span>探测端点</span><strong class="mono">${escapeHTML(proxy.grpcProbeEndpoint || "-")}</strong></div>
+    <div><span>最近成功</span><strong>${escapeHTML(formatTime(proxy.grpcProbeSuccessAtUnixMilli))}</strong></div>
+    <div><span>发现服务</span><strong class="runtime-probe-services">${escapeHTML((proxy.grpcServices || []).join("、") || "-")}</strong></div>
+    <div><span>探测失败</span><strong class="runtime-probe-error">${escapeHTML(proxy.grpcProbeError || "-")}</strong></div>
     <div><span>PID</span><strong>${escapeHTML(proxy.pid || "-")}</strong></div>
     <div><span>重启次数</span><strong>${escapeHTML(proxy.restartCount || 0)}</strong></div>
   `;
@@ -774,7 +765,9 @@ function renderRuntimeConfig(payload) {
       </div>
     </fieldset>
   `).join("") || `<div class="empty-state">当前没有 Proxy 配置。</div>`;
-  if (proxy.lastError) {
+  if (proxy.grpcProbeError) {
+    $("#runtimeConfigNotice").textContent = `gRPC 探测异常：${proxy.grpcProbeError}`;
+  } else if (proxy.lastError) {
     $("#runtimeConfigNotice").textContent = proxy.lastError;
   }
 }
@@ -3664,12 +3657,22 @@ function resetRuntimeSelections() {
   resetTopicStatusPoll();
   resetTopicMessagesPoll();
   resetConsumerDetailPoll();
+  if (state.snapshotPollTimer) {
+    window.clearTimeout(state.snapshotPollTimer);
+    state.snapshotPollTimer = null;
+  }
+  state.snapshotPollCount = 0;
+  state.lastRefreshTriggerText = "";
   state.clusters = [];
   state.features = null;
+  state.runtimeConfig = null;
   state.topics = [];
   state.consumers = [];
   state.lastFeaturePayload = null;
+  state.lastTopicPayload = null;
   state.featureConfigSearch = "";
+  state.topicSearch = "";
+  state.consumerSearch = "";
   state.selectedClusterName = "";
   state.selectedTopicName = "";
   state.selectedTopicRouteTopic = "";
@@ -3686,11 +3689,21 @@ function resetRuntimeSelections() {
   $("#topicRouteRows").innerHTML = `<tr><td colspan="6">选择一个 Topic 查看路由。</td></tr>`;
   $("#topicQueueRows").innerHTML = `<tr><td colspan="6">选择一个 Topic 查看队列水位。</td></tr>`;
   $("#topicMessageRows").innerHTML = `<tr><td colspan="8">选择一个 Topic 浏览消息。</td></tr>`;
+  $("#clusterRows").innerHTML = `<tr><td colspan="8">等待当前集群刷新。</td></tr>`;
+  $("#topicRows").innerHTML = `<tr><td colspan="3">等待当前集群刷新。</td></tr>`;
+  $("#consumerRows").innerHTML = `<tr><td colspan="6">等待当前集群刷新。</td></tr>`;
+  $("#clusterStatus").textContent = "等待当前集群刷新";
+  $("#featureStatus").textContent = "等待当前集群刷新";
+  $("#topicStatus").textContent = "等待当前集群刷新";
+  $("#consumerStatus").textContent = "等待当前集群刷新";
+  $("#runtimeConfigStatus").textContent = "等待当前集群刷新";
   $("#systemTopicRows").innerHTML = `<tr><td colspan="5">等待刷新。</td></tr>`;
   $("#capabilityGrid").innerHTML = `<div class="empty-state">等待能力画像。</div>`;
   $("#nameServerConfigGroups").innerHTML = `<div class="empty-state">等待刷新。</div>`;
   $("#brokerConfigGroups").innerHTML = `<div class="empty-state">等待刷新。</div>`;
   $("#featureConfigSearch").value = "";
+  $("#topicSearchInput").value = "";
+  $("#consumerSearchInput").value = "";
   $("#chainSource").textContent = "等待从消息列表选择，或使用高级查询。";
 }
 
@@ -3928,12 +3941,30 @@ function escapeAttr(value) {
   return escapeHTML(value).replaceAll("`", "&#096;");
 }
 
+// initializeDashboard 先获得固定集群定义，再让健康信息和各个快照独立加载。
+async function initializeDashboard() {
+  try {
+    await loadConfig();
+  } catch (error) {
+    const message = errorMessage(error);
+    $("#clusterSwitchStatus").textContent = message;
+    $("#snapshotState").textContent = "异常";
+    $("#clusterStatus").textContent = message;
+    $("#featureStatus").textContent = message;
+    $("#topicStatus").textContent = message;
+    $("#consumerStatus").textContent = message;
+    $("#runtimeConfigStatus").textContent = message;
+    return;
+  }
+  const [healthResult] = await Promise.allSettled([loadHealth(), loadSnapshots()]);
+  if (healthResult.status === "rejected") {
+    $("#clusterSwitchStatus").textContent = `健康检查失败 · ${errorMessage(healthResult.reason)}`;
+  }
+}
+
 bindTabs();
 bindSubtabs();
-$("#openNameServerDialog").addEventListener("click", openNameServerDialog);
-$("#nameServerDialogClose").addEventListener("click", closeNameServerDialog);
-$("#nameServerDialogCancel").addEventListener("click", closeNameServerDialog);
-$("#nameServerForm").addEventListener("submit", handleNameServerSubmit);
+$("#clusterSelect").addEventListener("change", handleClusterSelectionChange);
 $("#detailDialogClose").addEventListener("click", closeDetailDialog);
 $("#refreshButton").addEventListener("click", forceRefreshSnapshots);
 $("#proxyRuntimeForm").addEventListener("submit", handleProxyRuntimeSubmit);
@@ -3975,13 +4006,4 @@ $("#topicMessagesRefresh").addEventListener("click", () => {
   }
 });
 
-loadConfig()
-  .then(loadHealth)
-  .then(loadSnapshots)
-  .catch((error) => {
-    $("#snapshotState").textContent = error.message;
-    $("#clusterStatus").textContent = error.message;
-    $("#featureStatus").textContent = error.message;
-    $("#topicStatus").textContent = error.message;
-    $("#consumerStatus").textContent = error.message;
-  });
+initializeDashboard();

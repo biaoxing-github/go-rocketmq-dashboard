@@ -41,6 +41,8 @@ type ProxyRuntimeOptions struct {
 	StartTimeout time.Duration
 	// StopTimeout 是发送中断信号后等待进程退出的最长时间。
 	StopTimeout time.Duration
+	// ProbeTimeout 是一次 gRPC Reflection 服务发现允许占用的最长时间。
+	ProbeTimeout time.Duration
 }
 
 // proxyRuntimeState 是持久化到磁盘的唯一配置真源。
@@ -69,18 +71,22 @@ type proxyRuntimeFieldDefinition struct {
 type ProxyRuntimeManager struct {
 	options ProxyRuntimeOptions
 
-	operationMu sync.Mutex
-	mu          sync.RWMutex
-	state       proxyRuntimeState
-	cmd         *exec.Cmd
-	done        chan error
-	stopping    bool
-	running     bool
-	healthy     bool
-	status      string
-	lastError   string
-	startedAt   int64
-	restarts    int
+	operationMu    sync.Mutex
+	mu             sync.RWMutex
+	state          proxyRuntimeState
+	cmd            *exec.Cmd
+	done           chan error
+	stopping       bool
+	running        bool
+	healthy        bool
+	status         string
+	lastError      string
+	startedAt      int64
+	restarts       int
+	probeSuccessAt int64
+	probeEndpoint  string
+	probeError     string
+	probeServices  []string
 }
 
 var proxyRuntimeFieldDefinitions = []proxyRuntimeFieldDefinition{
@@ -136,7 +142,7 @@ func (m *ProxyRuntimeManager) Restore(ctx context.Context) error {
 	return m.startProxy(ctx, state.Settings)
 }
 
-// Snapshot 返回配置和进程状态副本，并即时探测运行中 gRPC 端口。
+// Snapshot 返回配置和进程状态副本，并即时完成只读 gRPC Reflection 服务发现。
 func (m *ProxyRuntimeManager) Snapshot() ProxyRuntimeSnapshot {
 	m.mu.RLock()
 	state := cloneProxyRuntimeState(m.state)
@@ -146,34 +152,77 @@ func (m *ProxyRuntimeManager) Snapshot() ProxyRuntimeSnapshot {
 	lastError := m.lastError
 	startedAt := m.startedAt
 	restarts := m.restarts
+	probeSuccessAt := m.probeSuccessAt
+	probeEndpoint := m.probeEndpoint
+	probeError := m.probeError
+	probeServices := append([]string(nil), m.probeServices...)
+	process := m.cmd
 	pid := 0
 	if m.cmd != nil && m.cmd.Process != nil {
 		pid = m.cmd.Process.Pid
 	}
 	m.mu.RUnlock()
+	grpcPort := proxySettingInt(state.Settings, "grpcServerPort")
 	if running {
-		healthy = proxyPortHealthy(proxySettingInt(state.Settings, "grpcServerPort"), 250*time.Millisecond)
-		if !healthy && status == "running" {
-			status = "error"
-			lastError = "gRPC 监听端口健康检查失败"
+		probeContext, cancel := context.WithTimeout(context.Background(), m.options.ProbeTimeout)
+		probe, probeErr := probeProxyGRPC(probeContext, grpcPort)
+		cancel()
+		probeEndpoint = probe.Endpoint
+		if probeErr != nil {
+			healthy = false
+			probeError = probeErr.Error()
+			probeServices = nil
+			if status == "running" {
+				status = "error"
+			}
+			lastError = "gRPC Reflection 探测失败: " + probeError
+		} else {
+			healthy = true
+			probeSuccessAt = time.Now().UnixMilli()
+			probeError = ""
+			probeServices = probe.Services
 		}
+		m.recordProxyGRPCProbe(process, healthy, probeEndpoint, probeSuccessAt, probeError, probeServices)
 	}
 	return ProxyRuntimeSnapshot{
-		Available:                m.available() == nil,
-		Enabled:                  state.Enabled,
-		Running:                  running,
-		Healthy:                  healthy,
-		Status:                   status,
-		PID:                      pid,
-		GrpcEndpoint:             fmt.Sprintf("0.0.0.0:%d", proxySettingInt(state.Settings, "grpcServerPort")),
-		RemotingEndpoint:         fmt.Sprintf("0.0.0.0:%d", proxySettingInt(state.Settings, "remotingListenPort")),
-		GrpcExternalEndpoint:     proxyExternalEndpoint(m.options.ExternalHost, m.options.ExternalGRPCPort),
-		RemotingExternalEndpoint: proxyExternalEndpoint(m.options.ExternalHost, m.options.ExternalRemotingPort),
-		StartedAtUnixMilli:       startedAt,
-		RestartCount:             restarts,
-		LastError:                lastError,
-		Fields:                   proxyRuntimeFields(state.Settings),
+		Available:                   m.available() == nil,
+		Enabled:                     state.Enabled,
+		Running:                     running,
+		Healthy:                     healthy,
+		Status:                      status,
+		PID:                         pid,
+		GrpcEndpoint:                fmt.Sprintf("0.0.0.0:%d", grpcPort),
+		RemotingEndpoint:            fmt.Sprintf("0.0.0.0:%d", proxySettingInt(state.Settings, "remotingListenPort")),
+		GrpcExternalEndpoint:        proxyExternalEndpoint(m.options.ExternalHost, m.options.ExternalGRPCPort),
+		RemotingExternalEndpoint:    proxyExternalEndpoint(m.options.ExternalHost, m.options.ExternalRemotingPort),
+		GrpcProbeEndpoint:           probeEndpoint,
+		GrpcProbeSuccessAtUnixMilli: probeSuccessAt,
+		GrpcProbeError:              probeError,
+		GrpcServices:                probeServices,
+		StartedAtUnixMilli:          startedAt,
+		RestartCount:                restarts,
+		LastError:                   lastError,
+		Fields:                      proxyRuntimeFields(state.Settings),
 	}
+}
+
+// recordProxyGRPCProbe 仅在被探测的 Java 进程仍是当前进程时保存服务发现结果。
+func (m *ProxyRuntimeManager) recordProxyGRPCProbe(process *exec.Cmd, healthy bool, endpoint string, successAt int64, probeError string, services []string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.running || m.cmd != process {
+		return
+	}
+	m.healthy = healthy
+	m.probeEndpoint = endpoint
+	if healthy {
+		m.probeSuccessAt = successAt
+		m.probeError = ""
+		m.probeServices = append([]string(nil), services...)
+		return
+	}
+	m.probeError = probeError
+	m.probeServices = nil
 }
 
 // Apply 原子保存配置；启用状态会立即启动或重启，失败时恢复旧配置和旧运行态。
@@ -257,7 +306,7 @@ func (m *ProxyRuntimeManager) restorePreviousState(ctx context.Context, previous
 	return m.startProxy(ctx, previous.Settings)
 }
 
-// startProxy 直接启动官方 ProxyStartup Java 主类，并等待 gRPC 端口就绪。
+// startProxy 直接启动官方 ProxyStartup Java 主类，并等待 gRPC Reflection 服务发现就绪。
 func (m *ProxyRuntimeManager) startProxy(ctx context.Context, settings map[string]any) error {
 	if err := m.available(); err != nil {
 		m.setStoppedStatus("unavailable", err.Error())
@@ -302,10 +351,17 @@ func (m *ProxyRuntimeManager) startProxy(ctx context.Context, settings map[strin
 		}
 	}
 	port := proxySettingInt(settings, "grpcServerPort")
+	probeEndpoint := proxyGRPCProbeEndpoint(port)
+	var lastProbeError error
 	ticker := time.NewTicker(250 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		if proxyPortHealthy(port, 200*time.Millisecond) {
+		probeContext, probeCancel := context.WithTimeout(startCtx, m.options.ProbeTimeout)
+		probe, probeErr := probeProxyGRPC(probeContext, port)
+		probeCancel()
+		if probeErr == nil {
+			probeSuccessAt := time.Now().UnixMilli()
+			m.recordProxyGRPCProbe(cmd, true, probe.Endpoint, probeSuccessAt, "", probe.Services)
 			m.mu.Lock()
 			if m.cmd == cmd {
 				m.healthy = true
@@ -316,6 +372,8 @@ func (m *ProxyRuntimeManager) startProxy(ctx context.Context, settings map[strin
 			m.mu.Unlock()
 			return nil
 		}
+		lastProbeError = probeErr
+		m.recordProxyGRPCProbe(cmd, false, probe.Endpoint, 0, probeErr.Error(), nil)
 		select {
 		case processErr := <-done:
 			if processErr == nil {
@@ -324,7 +382,7 @@ func (m *ProxyRuntimeManager) startProxy(ctx context.Context, settings map[strin
 			return processErr
 		case <-startCtx.Done():
 			_ = m.stopProxy()
-			return fmt.Errorf("等待 gRPC 端口 %d 就绪超时: %w", port, startCtx.Err())
+			return fmt.Errorf("等待 gRPC Reflection 服务发现 %s 就绪超时: %w; 最近失败: %v", probeEndpoint, startCtx.Err(), lastProbeError)
 		case <-ticker.C:
 		}
 	}
@@ -544,6 +602,9 @@ func normalizeProxyRuntimeOptions(options ProxyRuntimeOptions) ProxyRuntimeOptio
 	}
 	if options.StopTimeout <= 0 {
 		options.StopTimeout = 30 * time.Second
+	}
+	if options.ProbeTimeout <= 0 {
+		options.ProbeTimeout = 3 * time.Second
 	}
 	return options
 }
@@ -828,19 +889,6 @@ func cloneProxyRuntimeState(state proxyRuntimeState) proxyRuntimeState {
 		settings[key] = value
 	}
 	return proxyRuntimeState{Version: state.Version, Enabled: state.Enabled, Settings: settings}
-}
-
-// proxyPortHealthy 使用短 TCP 握手确认 gRPC 监听端口已经打开。
-func proxyPortHealthy(port int, timeout time.Duration) bool {
-	if port <= 0 {
-		return false
-	}
-	connection, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)), timeout)
-	if err != nil {
-		return false
-	}
-	_ = connection.Close()
-	return true
 }
 
 // proxyExternalEndpoint 组合部署宿主机和映射端口，供页面直接展示客户端连接地址。

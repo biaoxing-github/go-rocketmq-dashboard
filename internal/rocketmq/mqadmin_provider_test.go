@@ -11,6 +11,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -721,6 +722,165 @@ func TestCollectTopicMessagesByOffsetKeepsBrokerQueueFilter(t *testing.T) {
 	}
 	if len(result.Rows) != 2 || result.Rows[0].QueueID != 1 || result.Rows[1].QueueOffset != 4 {
 		t.Fatalf("unexpected filtered rows: %#v", result.Rows)
+	}
+}
+
+func TestTopicMessagesUsesBoundedNativeWorkersAndCommandFallback(t *testing.T) {
+	const fallbackOffset int64 = 3
+
+	var nativeMu sync.Mutex
+	nativeCalls := 0
+	activeNativeCalls := 0
+	maxNativeCalls := 0
+	started := make(chan struct{}, nativeTopicMessageBrowseWorkers)
+	release := make(chan struct{})
+	commandFallbackCalls := 0
+	var fallbackMu sync.Mutex
+
+	provider := &MQAdminProvider{
+		NameServer: "127.0.0.1:9876",
+		CommandRunner: commandRunnerFunc(func(ctx context.Context, args ...string) (string, error) {
+			switch args[0] {
+			case "topicStatus":
+				return topicStatusOutputForTest("broker-a", 0, 0, 8), nil
+			case "queryMsgByOffset":
+				fallbackMu.Lock()
+				commandFallbackCalls++
+				fallbackMu.Unlock()
+				return messageDetailOutputForTest("fallback-3", "native_topic", 0, fallbackOffset), nil
+			default:
+				return "", errors.New("unexpected command: " + args[0])
+			}
+		}),
+		NativeMessageByOffset: func(ctx context.Context, topic string, brokerName string, queueID int, offset int64) (MessageDetail, error) {
+			nativeMu.Lock()
+			nativeCalls++
+			activeNativeCalls++
+			if activeNativeCalls > maxNativeCalls {
+				maxNativeCalls = activeNativeCalls
+			}
+			nativeMu.Unlock()
+			select {
+			case started <- struct{}{}:
+			default:
+			}
+			<-release
+			defer func() {
+				nativeMu.Lock()
+				activeNativeCalls--
+				nativeMu.Unlock()
+			}()
+			if offset == fallbackOffset {
+				return MessageDetail{}, errors.New("native offset read failed")
+			}
+			return MessageDetail{
+				MessageID:      "native-" + strconv.FormatInt(offset, 10),
+				Topic:          topic,
+				BrokerName:     brokerName,
+				QueueID:        queueID,
+				QueueOffset:    offset,
+				StoreTimestamp: 1000 + offset,
+			}, nil
+		},
+	}
+
+	type topicMessagesResult struct {
+		messages TopicMessages
+		err      error
+	}
+	resultCh := make(chan topicMessagesResult, 1)
+	go func() {
+		messages, err := provider.TopicMessages(context.Background(), MessageBrowseQuery{Topic: "native_topic", QueueID: -1, Limit: 8})
+		resultCh <- topicMessagesResult{messages: messages, err: err}
+	}()
+
+	for worker := 0; worker < nativeTopicMessageBrowseWorkers; worker++ {
+		select {
+		case <-started:
+		case <-time.After(time.Second):
+			t.Fatalf("native worker %d did not start", worker+1)
+		}
+	}
+	nativeMu.Lock()
+	if maxNativeCalls != nativeTopicMessageBrowseWorkers {
+		nativeMu.Unlock()
+		t.Fatalf("expected %d concurrent native readers, got %d", nativeTopicMessageBrowseWorkers, maxNativeCalls)
+	}
+	nativeMu.Unlock()
+	close(release)
+
+	select {
+	case result := <-resultCh:
+		if result.err != nil {
+			t.Fatalf("browse topic messages: %v", result.err)
+		}
+		if result.messages.ScannedOffsets != 8 || result.messages.FetchedOffsets != 8 || result.messages.ReusedOffsets != 0 {
+			t.Fatalf("unexpected offset counters: %#v", result.messages)
+		}
+		if len(result.messages.Rows) != 8 || len(result.messages.Warnings) != 0 {
+			t.Fatalf("unexpected native browse result: %#v", result.messages)
+		}
+		foundFallback := false
+		for _, message := range result.messages.Rows {
+			if message.MessageID == "fallback-3" {
+				foundFallback = true
+			}
+		}
+		if !foundFallback {
+			t.Fatalf("expected fallback message in %#v", result.messages.Rows)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("native topic browse did not finish")
+	}
+
+	nativeMu.Lock()
+	gotNativeCalls := nativeCalls
+	gotMaxNativeCalls := maxNativeCalls
+	nativeMu.Unlock()
+	fallbackMu.Lock()
+	gotFallbackCalls := commandFallbackCalls
+	fallbackMu.Unlock()
+	if gotNativeCalls != 8 || gotMaxNativeCalls > nativeTopicMessageBrowseWorkers {
+		t.Fatalf("unexpected native reader usage calls=%d max=%d", gotNativeCalls, gotMaxNativeCalls)
+	}
+	if gotFallbackCalls != 1 {
+		t.Fatalf("expected one command fallback, got %d", gotFallbackCalls)
+	}
+}
+
+func TestTopicMessagesUsesSidecarFallbackAfterNativeReaderFailure(t *testing.T) {
+	commandRunnerCalls := 0
+	provider := &MQAdminProvider{
+		NameServer:     "127.0.0.1:9876",
+		SidecarEnabled: true,
+		SidecarTransport: commandRunnerFunc(func(ctx context.Context, args ...string) (string, error) {
+			switch args[0] {
+			case "topicStatus":
+				return topicStatusOutputForTest("broker-a", 0, 0, 1), nil
+			case "queryMsgByOffset":
+				return messageDetailOutputForTest("sidecar-fallback", "sidecar_topic", 0, 0), nil
+			default:
+				return "", errors.New("unexpected sidecar command: " + args[0])
+			}
+		}),
+		CommandRunner: commandRunnerFunc(func(ctx context.Context, args ...string) (string, error) {
+			commandRunnerCalls++
+			return "", errors.New("command runner should not be used while sidecar is available")
+		}),
+		NativeMessageByOffset: func(ctx context.Context, topic string, brokerName string, queueID int, offset int64) (MessageDetail, error) {
+			return MessageDetail{}, errors.New("native offset read failed")
+		},
+	}
+
+	messages, err := provider.TopicMessages(context.Background(), MessageBrowseQuery{Topic: "sidecar_topic", QueueID: -1, Limit: 1})
+	if err != nil {
+		t.Fatalf("browse topic messages through sidecar fallback: %v", err)
+	}
+	if len(messages.Rows) != 1 || messages.Rows[0].MessageID != "sidecar-fallback" {
+		t.Fatalf("unexpected sidecar fallback messages %#v", messages)
+	}
+	if commandRunnerCalls != 0 {
+		t.Fatalf("expected sidecar fallback before command runner, calls=%d", commandRunnerCalls)
 	}
 }
 

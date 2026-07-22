@@ -41,6 +41,18 @@ type fakeProvider struct {
 	lastMessageChainQuery rocketmq.MessageQuery
 }
 
+// defaultClusterRuntime 返回单集群测试绑定的默认运行时，避免测试绕过 clusterId 隔离边界。
+func defaultClusterRuntime(t *testing.T, app *App) *clusterRuntime {
+	t.Helper()
+	app.clusterMu.RLock()
+	defer app.clusterMu.RUnlock()
+	runtime, ok := app.clusters["default"]
+	if !ok {
+		t.Fatal("default cluster runtime is missing")
+	}
+	return runtime
+}
+
 func TestPublicAppDefinesCalledFormatHelpers(t *testing.T) {
 	script, err := os.ReadFile("public/app.js")
 	if err != nil {
@@ -80,6 +92,58 @@ func TestPublicAppExplainsTransportFailures(t *testing.T) {
 		if !strings.Contains(source, expected) {
 			t.Fatalf("public/app.js should explain transport failure with %q", expected)
 		}
+	}
+}
+
+func TestPublicAppUsesFixedClusterRequestContextAndIndependentSnapshots(t *testing.T) {
+	script, err := os.ReadFile("public/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(script)
+	for _, expected := range []string{
+		"CLUSTER_STORAGE_KEY",
+		"sessionStorage",
+		"X-RMQD-Cluster-ID",
+		"AUDITED_MUTATION_PATHS",
+		"X-RMQD-Operation-Reason",
+		"switchDashboardCluster",
+		"Promise.allSettled",
+		"renderSnapshotFailure",
+	} {
+		if !strings.Contains(source, expected) {
+			t.Fatalf("public/app.js should keep fixed cluster request contract %q", expected)
+		}
+	}
+	for _, forbidden := range []string{
+		"switchNameServer",
+		"openNameServerDialog",
+		"NAME_SERVER_STORAGE_KEY",
+		"fetchJSON(\"/api/config\", {\n      method: \"POST\"",
+	} {
+		if strings.Contains(source, forbidden) {
+			t.Fatalf("public/app.js should not retain global NameServer switching contract %q", forbidden)
+		}
+	}
+}
+
+func TestPublicIndexDefinesFixedClusterAndMutationInputs(t *testing.T) {
+	index, err := os.ReadFile("public/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(index)
+	for _, expected := range []string{
+		`id="clusterSelect"`,
+		`id="authTokenInput"`,
+		`id="operationReasonInput"`,
+	} {
+		if !strings.Contains(source, expected) {
+			t.Fatalf("public/index.html should expose fixed cluster mutation control %q", expected)
+		}
+	}
+	if strings.Contains(source, `id="nameServerDialog"`) {
+		t.Fatal("public/index.html should not expose a mutable NameServer dialog")
 	}
 }
 
@@ -156,10 +220,21 @@ func TestPublicAppRendersEditableRuntimeConfigControls(t *testing.T) {
 		"data-proxy-switch-state",
 		"grpcExternalEndpoint",
 		"remotingExternalEndpoint",
+		"grpcProbeEndpoint",
+		"grpcProbeSuccessAtUnixMilli",
+		"grpcProbeError",
+		"grpcServices",
+		"gRPC 就绪",
+		"Reflection 可用",
+		"Reflection 未就绪",
 		"对外 gRPC",
 		"对外 Remoting",
 		"容器 gRPC",
 		"容器 Remoting",
+		"探测端点",
+		"最近成功",
+		"发现服务",
+		"探测失败",
 	} {
 		if !strings.Contains(source, expected) {
 			t.Fatalf("public/app.js should include editable runtime config contract %q", expected)
@@ -456,7 +531,7 @@ func (p *fakeProvider) BrokerStatusCalls() int {
 func TestClustersEndpointReturnsBrokerVersionAndUsesCache(t *testing.T) {
 	provider := &fakeProvider{}
 	app := New(AppConfig{Provider: provider, ClusterCacheTTL: time.Second})
-	waitForSnapshot(t, app.clusterSnapshot)
+	waitForSnapshot(t, defaultClusterRuntime(t, app).clusterSnapshot)
 
 	first := httptest.NewRecorder()
 	app.ServeHTTP(first, httptest.NewRequest(http.MethodGet, "/api/clusters", nil))
@@ -499,7 +574,7 @@ func TestBrokerStatusEndpointReturnsRuntimeMetricsAndUsesCache(t *testing.T) {
 	if first.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d body=%s", first.Code, first.Body.String())
 	}
-	waitForSnapshot(t, app.brokerStatusSnapshots.snapshot(brokerAddr))
+	waitForSnapshot(t, defaultClusterRuntime(t, app).brokerStatusSnapshots.snapshot(brokerAddr))
 
 	cached := httptest.NewRecorder()
 	app.ServeHTTP(cached, request)
@@ -532,7 +607,7 @@ func TestFeaturesEndpointReturnsCapabilityReportAndUsesCache(t *testing.T) {
 	if first.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d body=%s", first.Code, first.Body.String())
 	}
-	waitForSnapshot(t, app.featureSnapshot)
+	waitForSnapshot(t, defaultClusterRuntime(t, app).featureSnapshot)
 
 	cached := httptest.NewRecorder()
 	app.ServeHTTP(cached, request)
@@ -595,15 +670,15 @@ func TestBrokerStatusEndpointReturnsFastBeforeSlowProviderFinishes(t *testing.T)
 		t.Fatalf("broker status refresh did not start")
 	}
 	close(provider.release)
-	waitForSnapshot(t, app.brokerStatusSnapshots.snapshot(brokerAddr))
+	waitForSnapshot(t, defaultClusterRuntime(t, app).brokerStatusSnapshots.snapshot(brokerAddr))
 }
 
 func TestRefreshEndpointForcesSnapshotsBeforeTTLExpires(t *testing.T) {
 	provider := &fakeProvider{}
 	app := New(AppConfig{Provider: provider, ClusterCacheTTL: time.Hour})
-	waitForSnapshot(t, app.clusterSnapshot)
-	waitForSnapshot(t, app.topicSnapshot)
-	waitForSnapshot(t, app.consumerSnapshot)
+	waitForSnapshot(t, defaultClusterRuntime(t, app).clusterSnapshot)
+	waitForSnapshot(t, defaultClusterRuntime(t, app).topicSnapshot)
+	waitForSnapshot(t, defaultClusterRuntime(t, app).consumerSnapshot)
 
 	recorder := httptest.NewRecorder()
 	app.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/api/refresh", nil))
@@ -658,9 +733,9 @@ func TestRefreshEndpointDoesNotDuplicateRunningSnapshots(t *testing.T) {
 	}
 
 	close(provider.release)
-	waitForSnapshot(t, app.clusterSnapshot)
-	waitForSnapshot(t, app.topicSnapshot)
-	waitForSnapshot(t, app.consumerSnapshot)
+	waitForSnapshot(t, defaultClusterRuntime(t, app).clusterSnapshot)
+	waitForSnapshot(t, defaultClusterRuntime(t, app).topicSnapshot)
+	waitForSnapshot(t, defaultClusterRuntime(t, app).consumerSnapshot)
 }
 
 func TestTopicRouteEndpointReturnsBrokerRouting(t *testing.T) {
@@ -673,7 +748,7 @@ func TestTopicRouteEndpointReturnsBrokerRouting(t *testing.T) {
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
 	}
-	waitForSnapshot(t, app.topicRouteSnapshots.snapshot("sample_order_events_topic"))
+	waitForSnapshot(t, defaultClusterRuntime(t, app).topicRouteSnapshots.snapshot("sample_order_events_topic"))
 
 	cached := httptest.NewRecorder()
 	app.ServeHTTP(cached, request)
@@ -706,7 +781,7 @@ func TestTopicStatusEndpointReturnsQueueWatermarks(t *testing.T) {
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
 	}
-	waitForSnapshot(t, app.topicStatusSnapshots.snapshot("sample_order_events_topic"))
+	waitForSnapshot(t, defaultClusterRuntime(t, app).topicStatusSnapshots.snapshot("sample_order_events_topic"))
 
 	cached := httptest.NewRecorder()
 	app.ServeHTTP(cached, request)
@@ -743,7 +818,7 @@ func TestTopicMessagesEndpointReturnsRecentMessagesAndUsesCache(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build message browse cache key: %v", err)
 	}
-	waitForSnapshot(t, app.topicMessageSnapshots.snapshot(key))
+	waitForSnapshot(t, defaultClusterRuntime(t, app).topicMessageSnapshots.snapshot(key))
 
 	cached := httptest.NewRecorder()
 	app.ServeHTTP(cached, request)
@@ -776,7 +851,7 @@ func TestTopicMessagesEndpointPassesBrokerQueueFilterAndUsesSeparateCache(t *tes
 	if err != nil {
 		t.Fatalf("build unfiltered cache key: %v", err)
 	}
-	waitForSnapshot(t, app.topicMessageSnapshots.snapshot(unfilteredKey))
+	waitForSnapshot(t, defaultClusterRuntime(t, app).topicMessageSnapshots.snapshot(unfilteredKey))
 
 	filtered := httptest.NewRequest(http.MethodGet, "/api/topic-messages?topic=sample_order_events_topic&brokerName=broker-a&queueId=1&limit=5", nil)
 	filteredRecorder := httptest.NewRecorder()
@@ -788,7 +863,7 @@ func TestTopicMessagesEndpointPassesBrokerQueueFilterAndUsesSeparateCache(t *tes
 	if err != nil {
 		t.Fatalf("build filtered cache key: %v", err)
 	}
-	waitForSnapshot(t, app.topicMessageSnapshots.snapshot(filteredKey))
+	waitForSnapshot(t, defaultClusterRuntime(t, app).topicMessageSnapshots.snapshot(filteredKey))
 	if provider.topicMessageCalls != 2 {
 		t.Fatalf("expected filtered browse to use an independent snapshot, got %d provider calls", provider.topicMessageCalls)
 	}
@@ -830,7 +905,7 @@ func TestTopicMessagesRefreshPassesPreviousSnapshotToIncrementalProvider(t *test
 	if err != nil {
 		t.Fatalf("build message browse cache key: %v", err)
 	}
-	store := app.topicMessageSnapshots.snapshot(key)
+	store := defaultClusterRuntime(t, app).topicMessageSnapshots.snapshot(key)
 	waitForSnapshot(t, store)
 
 	refresh := httptest.NewRecorder()
@@ -867,7 +942,7 @@ func TestMessageChainEndpointReturnsTimeline(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build message chain cache key: %v", err)
 	}
-	waitForSnapshot(t, app.messageChainSnapshots.snapshot(key))
+	waitForSnapshot(t, defaultClusterRuntime(t, app).messageChainSnapshots.snapshot(key))
 
 	cached := httptest.NewRecorder()
 	app.ServeHTTP(cached, request)
@@ -902,7 +977,7 @@ func TestMessageChainEndpointUsesDedicatedLongCacheTTL(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build message chain cache key: %v", err)
 	}
-	waitForSnapshot(t, app.messageChainSnapshots.snapshot(key))
+	waitForSnapshot(t, defaultClusterRuntime(t, app).messageChainSnapshots.snapshot(key))
 	time.Sleep(30 * time.Millisecond)
 
 	second := httptest.NewRecorder()
@@ -943,7 +1018,7 @@ func TestMessageChainEndpointParsesQueueLocationAndTimeWindow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build message chain cache key: %v", err)
 	}
-	waitForSnapshot(t, app.messageChainSnapshots.snapshot(key))
+	waitForSnapshot(t, defaultClusterRuntime(t, app).messageChainSnapshots.snapshot(key))
 
 	if provider.lastMessageChainQuery != query {
 		t.Fatalf("unexpected provider query\nexpected=%#v\nactual=%#v", query, provider.lastMessageChainQuery)
@@ -973,7 +1048,7 @@ func TestMessageChainEndpointParsesKeyConsumerTraceAndMaxNum(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build message chain cache key: %v", err)
 	}
-	waitForSnapshot(t, app.messageChainSnapshots.snapshot(key))
+	waitForSnapshot(t, defaultClusterRuntime(t, app).messageChainSnapshots.snapshot(key))
 
 	if provider.lastMessageChainQuery != query {
 		t.Fatalf("unexpected provider query\nexpected=%#v\nactual=%#v", query, provider.lastMessageChainQuery)
@@ -983,7 +1058,7 @@ func TestMessageChainEndpointParsesKeyConsumerTraceAndMaxNum(t *testing.T) {
 func TestTopicsEndpointReturnsClassifiedTopics(t *testing.T) {
 	provider := &fakeProvider{}
 	app := New(AppConfig{Provider: provider, ClusterCacheTTL: time.Second})
-	waitForSnapshot(t, app.topicSnapshot)
+	waitForSnapshot(t, defaultClusterRuntime(t, app).topicSnapshot)
 
 	recorder := httptest.NewRecorder()
 	app.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/topics", nil))
@@ -1010,12 +1085,12 @@ func TestTopicsEndpointReturnsClassifiedTopics(t *testing.T) {
 
 func TestTopicUpsertEndpointCallsProviderAndRefreshesTopics(t *testing.T) {
 	provider := &fakeProvider{}
-	app := New(AppConfig{Provider: provider, ClusterCacheTTL: time.Hour})
-	waitForSnapshot(t, app.topicSnapshot)
+	app := New(mutationTestAppConfig(t, AppConfig{Provider: provider, ClusterCacheTTL: time.Hour}))
+	waitForSnapshot(t, defaultClusterRuntime(t, app).topicSnapshot)
 
 	body := bytes.NewBufferString(`{"topic":"codex_topic","clusterName":"DefaultCluster","readQueueNums":4,"writeQueueNums":4,"perm":6,"order":true,"attributes":"+message.type=NORMAL"}`)
 	recorder := httptest.NewRecorder()
-	app.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/api/topics", body))
+	app.ServeHTTP(recorder, authorizedMutationRequest(http.MethodPost, "/api/topics", body))
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
 	}
@@ -1043,12 +1118,12 @@ func TestTopicUpsertEndpointCallsProviderAndRefreshesTopics(t *testing.T) {
 // TestTopicPutEndpointCallsProviderAndRefreshesTopics 验证 PUT /api/topics 与 POST 共用 upsert 流程。
 func TestTopicPutEndpointCallsProviderAndRefreshesTopics(t *testing.T) {
 	provider := &fakeProvider{}
-	app := New(AppConfig{Provider: provider, ClusterCacheTTL: time.Hour})
-	waitForSnapshot(t, app.topicSnapshot)
+	app := New(mutationTestAppConfig(t, AppConfig{Provider: provider, ClusterCacheTTL: time.Hour}))
+	waitForSnapshot(t, defaultClusterRuntime(t, app).topicSnapshot)
 
 	body := bytes.NewBufferString(`{"topic":"codex_topic","clusterName":"DefaultCluster","readQueueNums":4,"writeQueueNums":4,"perm":6}`)
 	recorder := httptest.NewRecorder()
-	app.ServeHTTP(recorder, httptest.NewRequest(http.MethodPut, "/api/topics", body))
+	app.ServeHTTP(recorder, authorizedMutationRequest(http.MethodPut, "/api/topics", body))
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
 	}
@@ -1064,12 +1139,12 @@ func TestTopicPutEndpointCallsProviderAndRefreshesTopics(t *testing.T) {
 
 func TestTopicDeleteEndpointCallsProviderAndRefreshesTopics(t *testing.T) {
 	provider := &fakeProvider{}
-	app := New(AppConfig{Provider: provider, ClusterCacheTTL: time.Hour})
-	waitForSnapshot(t, app.topicSnapshot)
+	app := New(mutationTestAppConfig(t, AppConfig{Provider: provider, ClusterCacheTTL: time.Hour}))
+	waitForSnapshot(t, defaultClusterRuntime(t, app).topicSnapshot)
 
 	body := bytes.NewBufferString(`{"topic":"codex_topic","clusterName":"DefaultCluster"}`)
 	recorder := httptest.NewRecorder()
-	app.ServeHTTP(recorder, httptest.NewRequest(http.MethodDelete, "/api/topics", body))
+	app.ServeHTTP(recorder, authorizedMutationRequest(http.MethodDelete, "/api/topics", body))
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
 	}
@@ -1085,7 +1160,7 @@ func TestTopicDeleteEndpointCallsProviderAndRefreshesTopics(t *testing.T) {
 
 func TestTopicMessageSendEndpointCallsProvider(t *testing.T) {
 	provider := &fakeProvider{}
-	app := New(AppConfig{Provider: provider, ClusterCacheTTL: time.Hour})
+	app := New(mutationTestAppConfig(t, AppConfig{Provider: provider, ClusterCacheTTL: time.Hour}))
 	queueID := 1
 	var logs bytes.Buffer
 	previousLogWriter := log.Writer()
@@ -1094,7 +1169,7 @@ func TestTopicMessageSendEndpointCallsProvider(t *testing.T) {
 
 	body := bytes.NewBufferString(`{"topic":"codex_topic","body":"{\"hello\":\"rocketmq\"}","keys":"codex-key","tags":"qa","brokerName":"broker-a","queueId":1,"traceEnable":true}`)
 	recorder := httptest.NewRecorder()
-	app.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/api/topic-messages/send", body))
+	app.ServeHTTP(recorder, authorizedMutationRequest(http.MethodPost, "/api/topic-messages/send", body))
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
 	}
@@ -1126,7 +1201,7 @@ func TestTopicMessageSendEndpointCallsProvider(t *testing.T) {
 
 func TestTopicMessageSendEndpointRejectsMissingBody(t *testing.T) {
 	provider := &fakeProvider{}
-	app := New(AppConfig{Provider: provider, ClusterCacheTTL: time.Hour})
+	app := New(mutationTestAppConfig(t, AppConfig{Provider: provider, ClusterCacheTTL: time.Hour}))
 
 	recorder := httptest.NewRecorder()
 	body := bytes.NewBufferString(`{"topic":"codex_topic"}`)
@@ -1156,11 +1231,11 @@ func TestTopicUpsertEndpointRejectsMissingTarget(t *testing.T) {
 
 func TestConsumerOffsetResetEndpointCallsProvider(t *testing.T) {
 	provider := &fakeProvider{}
-	app := New(AppConfig{Provider: provider, ClusterCacheTTL: time.Hour})
+	app := New(mutationTestAppConfig(t, AppConfig{Provider: provider, ClusterCacheTTL: time.Hour}))
 
 	body := bytes.NewBufferString(`{"group":"codex-group","topic":"codex_topic","timestamp":"now","force":true}`)
 	recorder := httptest.NewRecorder()
-	app.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/api/consumer-offset/reset", body))
+	app.ServeHTTP(recorder, authorizedMutationRequest(http.MethodPost, "/api/consumer-offset/reset", body))
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
 	}
@@ -1183,8 +1258,8 @@ func TestConsumerOffsetResetEndpointCallsProvider(t *testing.T) {
 
 func TestConsumerOffsetResetEndpointInvalidatesConsumerDetailAndRefreshesConsumers(t *testing.T) {
 	provider := &fakeProvider{}
-	app := New(AppConfig{Provider: provider, ClusterCacheTTL: time.Hour})
-	waitForSnapshot(t, app.consumerSnapshot)
+	app := New(mutationTestAppConfig(t, AppConfig{Provider: provider, ClusterCacheTTL: time.Hour}))
+	waitForSnapshot(t, defaultClusterRuntime(t, app).consumerSnapshot)
 	initialConsumerCalls := provider.consumerCalls
 
 	topicDetailRequest := httptest.NewRequest(http.MethodGet, "/api/consumer-detail?group=sample-order-events-consumer&topic=sample_order_events_topic", nil)
@@ -1194,10 +1269,10 @@ func TestConsumerOffsetResetEndpointInvalidatesConsumerDetailAndRefreshesConsume
 
 	firstTopicDetail := httptest.NewRecorder()
 	app.ServeHTTP(firstTopicDetail, topicDetailRequest)
-	waitForSnapshot(t, app.consumerDetailSnapshots.snapshot(topicDetailKey))
+	waitForSnapshot(t, defaultClusterRuntime(t, app).consumerDetailSnapshots.snapshot(topicDetailKey))
 	firstGroupDetail := httptest.NewRecorder()
 	app.ServeHTTP(firstGroupDetail, groupDetailRequest)
-	waitForSnapshot(t, app.consumerDetailSnapshots.snapshot(groupDetailKey))
+	waitForSnapshot(t, defaultClusterRuntime(t, app).consumerDetailSnapshots.snapshot(groupDetailKey))
 	if provider.consumerDetailCalls != 2 {
 		t.Fatalf("expected two detail cache fills, got %d", provider.consumerDetailCalls)
 	}
@@ -1212,7 +1287,7 @@ func TestConsumerOffsetResetEndpointInvalidatesConsumerDetailAndRefreshesConsume
 
 	resetBody := bytes.NewBufferString(`{"group":"sample-order-events-consumer","topic":"sample_order_events_topic","timestamp":"now","force":true}`)
 	reset := httptest.NewRecorder()
-	app.ServeHTTP(reset, httptest.NewRequest(http.MethodPost, "/api/consumer-offset/reset", resetBody))
+	app.ServeHTTP(reset, authorizedMutationRequest(http.MethodPost, "/api/consumer-offset/reset", resetBody))
 	if reset.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d body=%s", reset.Code, reset.Body.String())
 	}
@@ -1222,10 +1297,10 @@ func TestConsumerOffsetResetEndpointInvalidatesConsumerDetailAndRefreshesConsume
 
 	refreshedTopicDetail := httptest.NewRecorder()
 	app.ServeHTTP(refreshedTopicDetail, topicDetailRequest)
-	waitForSnapshot(t, app.consumerDetailSnapshots.snapshot(topicDetailKey))
+	waitForSnapshot(t, defaultClusterRuntime(t, app).consumerDetailSnapshots.snapshot(topicDetailKey))
 	refreshedGroupDetail := httptest.NewRecorder()
 	app.ServeHTTP(refreshedGroupDetail, groupDetailRequest)
-	waitForSnapshot(t, app.consumerDetailSnapshots.snapshot(groupDetailKey))
+	waitForSnapshot(t, defaultClusterRuntime(t, app).consumerDetailSnapshots.snapshot(groupDetailKey))
 	if provider.consumerDetailCalls != 4 {
 		t.Fatalf("expected reset to invalidate topic and group detail caches, got %d detail calls", provider.consumerDetailCalls)
 	}
@@ -1236,10 +1311,10 @@ func TestConsumerOffsetResetEndpointValidatesAndNormalizesRequest(t *testing.T) 
 	offset := int64(3)
 	validBody := `{"group":" sample-order-events-consumer ","topic":" sample_order_events_topic ","force":false,"brokerAddr":" rmq-goadmin-broker:10911 ","queueId":0,"offset":3}`
 	provider := &fakeProvider{}
-	app := New(AppConfig{Provider: provider, ClusterCacheTTL: time.Hour})
+	app := New(mutationTestAppConfig(t, AppConfig{Provider: provider, ClusterCacheTTL: time.Hour}))
 
 	valid := httptest.NewRecorder()
-	app.ServeHTTP(valid, httptest.NewRequest(http.MethodPost, "/api/consumer-offset/reset", bytes.NewBufferString(validBody)))
+	app.ServeHTTP(valid, authorizedMutationRequest(http.MethodPost, "/api/consumer-offset/reset", bytes.NewBufferString(validBody)))
 	if valid.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d body=%s", valid.Code, valid.Body.String())
 	}
@@ -1309,7 +1384,7 @@ func TestConsumerOffsetResetEndpointRejectsMissingGroup(t *testing.T) {
 func TestConsumersEndpointReturnsLagAndOnlineState(t *testing.T) {
 	provider := &fakeProvider{}
 	app := New(AppConfig{Provider: provider, ClusterCacheTTL: time.Second})
-	waitForSnapshot(t, app.consumerSnapshot)
+	waitForSnapshot(t, defaultClusterRuntime(t, app).consumerSnapshot)
 
 	recorder := httptest.NewRecorder()
 	app.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/consumers", nil))
@@ -1345,7 +1420,7 @@ func TestConsumerDetailEndpointReturnsConnectionsAndProgress(t *testing.T) {
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
 	}
-	waitForSnapshot(t, app.consumerDetailSnapshots.snapshot(consumerDetailCacheKey("sample-order-events-consumer", "sample_order_events_topic")))
+	waitForSnapshot(t, defaultClusterRuntime(t, app).consumerDetailSnapshots.snapshot(consumerDetailCacheKey("sample-order-events-consumer", "sample_order_events_topic")))
 
 	cached := httptest.NewRecorder()
 	app.ServeHTTP(cached, request)
@@ -1424,7 +1499,7 @@ func TestTopicRouteEndpointReturnsFastBeforeSlowProviderFinishes(t *testing.T) {
 		t.Fatalf("topic route refresh did not start")
 	}
 	close(provider.release)
-	waitForSnapshot(t, app.topicRouteSnapshots.snapshot("sample_order_events_topic"))
+	waitForSnapshot(t, defaultClusterRuntime(t, app).topicRouteSnapshots.snapshot("sample_order_events_topic"))
 }
 
 func TestTopicStatusEndpointReturnsFastBeforeSlowProviderFinishes(t *testing.T) {
@@ -1461,7 +1536,7 @@ func TestTopicStatusEndpointReturnsFastBeforeSlowProviderFinishes(t *testing.T) 
 		t.Fatalf("topic status refresh did not start")
 	}
 	close(provider.release)
-	waitForSnapshot(t, app.topicStatusSnapshots.snapshot("sample_order_events_topic"))
+	waitForSnapshot(t, defaultClusterRuntime(t, app).topicStatusSnapshots.snapshot("sample_order_events_topic"))
 }
 
 func TestConsumerDetailEndpointReturnsFastBeforeSlowProviderFinishes(t *testing.T) {
@@ -1495,7 +1570,7 @@ func TestConsumerDetailEndpointReturnsFastBeforeSlowProviderFinishes(t *testing.
 		t.Fatalf("consumer detail refresh did not start")
 	}
 	close(provider.release)
-	waitForSnapshot(t, app.consumerDetailSnapshots.snapshot(consumerDetailCacheKey("sample-order-events-consumer", "")))
+	waitForSnapshot(t, defaultClusterRuntime(t, app).consumerDetailSnapshots.snapshot(consumerDetailCacheKey("sample-order-events-consumer", "")))
 }
 
 func TestMessageChainEndpointReturnsFastBeforeSlowProviderFinishes(t *testing.T) {
@@ -1536,7 +1611,7 @@ func TestMessageChainEndpointReturnsFastBeforeSlowProviderFinishes(t *testing.T)
 	if err != nil {
 		t.Fatalf("build message chain cache key: %v", err)
 	}
-	waitForSnapshot(t, app.messageChainSnapshots.snapshot(key))
+	waitForSnapshot(t, defaultClusterRuntime(t, app).messageChainSnapshots.snapshot(key))
 }
 
 func TestMessageChainEndpointDoesNotRetryFailedColdQueryWithoutRefresh(t *testing.T) {
@@ -1551,7 +1626,7 @@ func TestMessageChainEndpointDoesNotRetryFailedColdQueryWithoutRefresh(t *testin
 	first := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/api/message-chain?topic=sample_notice_topic&messageId=missing", nil)
 	app.ServeHTTP(first, request)
-	waitForLastError(t, app.messageChainSnapshots.snapshot(key))
+	waitForLastError(t, defaultClusterRuntime(t, app).messageChainSnapshots.snapshot(key))
 
 	second := httptest.NewRecorder()
 	app.ServeHTTP(second, request)
@@ -1582,7 +1657,7 @@ func TestTopicStatusEndpointDoesNotRetryFailedColdQueryWithoutRefresh(t *testing
 	first := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/api/topic-status?topic=sample_order_events_topic", nil)
 	app.ServeHTTP(first, request)
-	waitForLastError(t, app.topicStatusSnapshots.snapshot(topic))
+	waitForLastError(t, defaultClusterRuntime(t, app).topicStatusSnapshots.snapshot(topic))
 
 	second := httptest.NewRecorder()
 	app.ServeHTTP(second, request)
@@ -1608,12 +1683,12 @@ func TestTopicStatusEndpointDoesNotRetryFailedColdQueryWithoutRefresh(t *testing
 func TestEndpointKeepsLastSnapshotWhenRefreshFails(t *testing.T) {
 	provider := &flakyProvider{}
 	app := New(AppConfig{Provider: provider, ClusterCacheTTL: time.Millisecond})
-	waitForSnapshot(t, app.clusterSnapshot)
+	waitForSnapshot(t, defaultClusterRuntime(t, app).clusterSnapshot)
 	time.Sleep(2 * time.Millisecond)
 
 	first := httptest.NewRecorder()
 	app.ServeHTTP(first, httptest.NewRequest(http.MethodGet, "/api/clusters", nil))
-	waitForLastError(t, app.clusterSnapshot)
+	waitForLastError(t, defaultClusterRuntime(t, app).clusterSnapshot)
 
 	second := httptest.NewRecorder()
 	app.ServeHTTP(second, httptest.NewRequest(http.MethodGet, "/api/clusters", nil))
@@ -1643,7 +1718,8 @@ func TestHealthEndpointReturnsTargetLatencyBudget(t *testing.T) {
 	}
 }
 
-func TestConfigEndpointSwitchesNameServerAndClearsSnapshots(t *testing.T) {
+// TestConfigEndpointReturnsFixedClusterDefinitions 验证集群列表只能在启动时确定，运行时不得替换全局 Provider。
+func TestConfigEndpointReturnsFixedClusterDefinitions(t *testing.T) {
 	factories := make(map[string]*fakeProvider)
 	app := New(AppConfig{
 		ProviderFactory: func(nameServer string) rocketmq.Provider {
@@ -1651,29 +1727,34 @@ func TestConfigEndpointSwitchesNameServerAndClearsSnapshots(t *testing.T) {
 			factories[nameServer] = provider
 			return provider
 		},
-		NameServer:        "ns-a:9876",
-		NameServerOptions: []string{"ns-a:9876", "ns-b:9876"},
-		ClusterCacheTTL:   time.Second,
+		Clusters: []ClusterDefinition{
+			{ID: "cluster-a", Label: "集群 A", NameServer: "ns-a:9876"},
+			{ID: "cluster-b", Label: "集群 B", NameServer: "ns-b:9876"},
+		},
+		ClusterCacheTTL: time.Second,
 	})
 
-	body := bytes.NewBufferString(`{"nameServer":"ns-b:9876"}`)
 	recorder := httptest.NewRecorder()
-	app.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/api/config", body))
+	app.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/config", nil))
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
 	}
-
-	health := httptest.NewRecorder()
-	app.ServeHTTP(health, httptest.NewRequest(http.MethodGet, "/api/health", nil))
-	var payload responsePayload[map[string]any]
-	if err := json.Unmarshal(health.Body.Bytes(), &payload); err != nil {
-		t.Fatalf("decode health: %v", err)
+	var configPayload responsePayload[dashboardConfigPayload]
+	if err := json.Unmarshal(recorder.Body.Bytes(), &configPayload); err != nil {
+		t.Fatalf("decode config: %v", err)
 	}
-	if payload.Data["nameServer"] != "ns-b:9876" {
-		t.Fatalf("expected switched nameserver, got %#v", payload.Data)
+	if len(configPayload.Data.Clusters) != 2 || configPayload.Data.Clusters[0].ID != "cluster-a" || configPayload.Data.Clusters[1].ID != "cluster-b" {
+		t.Fatalf("unexpected fixed cluster definitions %#v", configPayload.Data)
 	}
-	if _, ok := factories["ns-b:9876"]; !ok {
-		t.Fatalf("expected provider factory to be called for ns-b")
+	post := httptest.NewRecorder()
+	app.ServeHTTP(post, httptest.NewRequest(http.MethodPost, "/api/config", bytes.NewBufferString(`{"nameServer":"ns-b:9876"}`)))
+	if post.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("expected config mutation rejection, got %d body=%s", post.Code, post.Body.String())
+	}
+	for _, nameServer := range []string{"ns-a:9876", "ns-b:9876"} {
+		if _, ok := factories[nameServer]; !ok {
+			t.Fatalf("expected provider factory startup call for %s", nameServer)
+		}
 	}
 }
 
