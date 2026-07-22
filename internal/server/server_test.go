@@ -1718,6 +1718,44 @@ func TestHealthEndpointReturnsTargetLatencyBudget(t *testing.T) {
 	}
 }
 
+// TestHealthEndpointWithoutClusterSelectionIsHealthyForMultiCluster 验证 Docker 健康检查不会因未选择业务集群而失败。
+func TestHealthEndpointWithoutClusterSelectionIsHealthyForMultiCluster(t *testing.T) {
+	app := New(AppConfig{
+		ProviderFactory: func(string) rocketmq.Provider { return &fakeProvider{} },
+		Clusters: []ClusterDefinition{
+			{ID: "cluster-a", Label: "集群 A", NameServer: "ns-a:9876"},
+			{ID: "cluster-b", Label: "集群 B", NameServer: "ns-b:9876"},
+		},
+		ClusterCacheTTL: time.Second,
+	})
+
+	globalRecorder := httptest.NewRecorder()
+	app.ServeHTTP(globalRecorder, httptest.NewRequest(http.MethodGet, "/api/health", nil))
+	if globalRecorder.Code != http.StatusOK {
+		t.Fatalf("expected global health status 200, got %d body=%s", globalRecorder.Code, globalRecorder.Body.String())
+	}
+	var globalPayload responsePayload[map[string]any]
+	if err := json.Unmarshal(globalRecorder.Body.Bytes(), &globalPayload); err != nil {
+		t.Fatalf("decode global health response: %v", err)
+	}
+	if globalPayload.Code != 0 || globalPayload.Data["configuredClusterCount"] != float64(2) {
+		t.Fatalf("expected multi-cluster global health response, got %#v", globalPayload)
+	}
+
+	selectedRecorder := httptest.NewRecorder()
+	app.ServeHTTP(selectedRecorder, httptest.NewRequest(http.MethodGet, "/api/health?clusterId=cluster-b", nil))
+	if selectedRecorder.Code != http.StatusOK {
+		t.Fatalf("expected selected health status 200, got %d body=%s", selectedRecorder.Code, selectedRecorder.Body.String())
+	}
+	var selectedPayload responsePayload[map[string]any]
+	if err := json.Unmarshal(selectedRecorder.Body.Bytes(), &selectedPayload); err != nil {
+		t.Fatalf("decode selected health response: %v", err)
+	}
+	if selectedPayload.Data["nameServer"] != "ns-b:9876" {
+		t.Fatalf("expected selected NameServer ns-b:9876, got %#v", selectedPayload.Data["nameServer"])
+	}
+}
+
 // TestConfigEndpointReturnsFixedClusterDefinitions 验证集群列表只能在启动时确定，运行时不得替换全局 Provider。
 func TestConfigEndpointReturnsFixedClusterDefinitions(t *testing.T) {
 	factories := make(map[string]*fakeProvider)

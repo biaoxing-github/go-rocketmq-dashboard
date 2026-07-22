@@ -226,7 +226,7 @@ func clusterRuntimeFromContext(ctx context.Context) *clusterRuntime {
 }
 
 func (a *App) routes() {
-	a.mux.HandleFunc("/api/health", a.clusterScoped(a.handleHealth))
+	a.mux.HandleFunc("/api/health", a.handleHealth)
 	a.mux.HandleFunc("/api/config", a.handleConfig)
 	a.mux.HandleFunc("/api/runtime-config", a.clusterScoped(a.handleRuntimeConfig))
 	a.mux.HandleFunc("/api/runtime-config/proxy", a.clusterScoped(a.handleProxyRuntimeConfig))
@@ -248,12 +248,35 @@ func (a *App) routes() {
 	a.mux.HandleFunc("/", a.handleStatic)
 }
 
+// requestHasClusterID 判断请求是否明确指定了业务集群。
+func requestHasClusterID(r *http.Request) bool {
+	return strings.TrimSpace(r.URL.Query().Get("clusterId")) != "" || strings.TrimSpace(r.Header.Get("X-RMQD-Cluster-ID")) != ""
+}
+
 func (a *App) handleHealth(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, errors.New("仅支持 GET"))
 		return
 	}
-	runtime := clusterRuntimeFromContext(r.Context())
+
+	runtime, err := a.clusterRuntimeForRequest(r)
+	if err != nil {
+		if requestHasClusterID(r) {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		// Docker 健康检查不携带业务 clusterId，多集群时只验证服务进程存活。
+		writeJSON(w, http.StatusOK, responsePayload[map[string]any]{
+			Code:    0,
+			Message: "ok",
+			Data: map[string]any{
+				"configuredClusterCount": len(a.configPayload().Clusters),
+				"latencyBudgetMillis":    a.latencyBudget.Milliseconds(),
+				"mode":                   "go-dashboard-mqadmin-provider",
+			},
+		})
+		return
+	}
 	writeJSON(w, http.StatusOK, responsePayload[map[string]any]{
 		Code:    0,
 		Message: "ok",
