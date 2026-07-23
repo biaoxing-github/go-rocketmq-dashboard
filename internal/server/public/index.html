@@ -373,6 +373,15 @@
                           <option value="2">2 / W</option>
                         </select>
                       </label>
+                      <label>
+                        <span>Topic 类型</span>
+                        <select name="messageType">
+                          <option value="NORMAL">普通</option>
+                          <option value="TRANSACTION">事务</option>
+                          <option value="FIFO">顺序</option>
+                          <option value="DELAY">延时</option>
+                        </select>
+                      </label>
                       <label class="topic-check">
                         <span>Order</span>
                         <input name="order" type="checkbox" />
@@ -386,8 +395,8 @@
                         <input name="hasUnitSub" type="checkbox" />
                       </label>
                       <label class="topic-wide">
-                        <span>Attributes</span>
-                        <input name="attributes" autocomplete="off" placeholder="+message.type=NORMAL" />
+                        <span>高级属性</span>
+                        <input name="attributes" autocomplete="off" placeholder="+cleanup.policy=COMPACTION" />
                       </label>
                     </div>
                     <div class="form-actions topic-mutation-actions">

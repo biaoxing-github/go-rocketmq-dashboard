@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -27,6 +28,10 @@ const (
 	PermissionRuntimeConfig Permission = "runtime-config.write"
 	// PermissionAuditRead 允许读取持久化操作审计。
 	PermissionAuditRead Permission = "audit.read"
+	// operationReasonHeader 兼容已有自动化调用方传入的 ASCII 操作理由。
+	operationReasonHeader = "X-RMQD-Operation-Reason"
+	// operationReasonEncodedHeader 承载浏览器百分号编码后的 UTF-8 操作理由。
+	operationReasonEncodedHeader = "X-RMQD-Operation-Reason-Encoded"
 )
 
 // Principal 是已认证操作者的稳定身份与角色集合。
@@ -321,6 +326,19 @@ type mutationAudit struct {
 	record AuditRecord
 }
 
+// operationReasonFromRequest 优先解码浏览器安全 Header，旧调用方仍可继续使用原始 Header。
+func operationReasonFromRequest(r *http.Request) (string, error) {
+	encoded := strings.TrimSpace(r.Header.Get(operationReasonEncodedHeader))
+	if encoded == "" {
+		return strings.TrimSpace(r.Header.Get(operationReasonHeader)), nil
+	}
+	reason, err := url.PathUnescape(encoded)
+	if err != nil {
+		return "", errors.New("写操作理由编码无效")
+	}
+	return strings.TrimSpace(reason), nil
+}
+
 // beginMutation 完成身份、权限、原因和开始审计记录四个写操作前置条件。
 func (a *App) beginMutation(r *http.Request, permission Permission, action string, target string, before any) (*mutationAudit, error) {
 	runtime := clusterRuntimeFromContext(r.Context())
@@ -338,9 +356,13 @@ func (a *App) beginMutation(r *http.Request, permission Permission, action strin
 		a.appendDeniedAudit(r.Context(), clusterID, action, target, principal, err)
 		return nil, mutationAdmissionError{status: http.StatusForbidden, err: err}
 	}
-	reason := strings.TrimSpace(r.Header.Get("X-RMQD-Operation-Reason"))
+	reason, err := operationReasonFromRequest(r)
+	if err != nil {
+		a.appendDeniedAudit(r.Context(), clusterID, action, target, principal, err)
+		return nil, mutationAdmissionError{status: http.StatusBadRequest, err: err}
+	}
 	if reason == "" {
-		err := errors.New("写操作需要 X-RMQD-Operation-Reason")
+		err := errors.New("写操作需要操作理由")
 		a.appendDeniedAudit(r.Context(), clusterID, action, target, principal, err)
 		return nil, mutationAdmissionError{status: http.StatusBadRequest, err: err}
 	}

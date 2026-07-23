@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 	"time"
 )
@@ -112,5 +113,53 @@ func TestMutationPersistsStartCompletionAndVerification(t *testing.T) {
 	}
 	if records[1].Actor.Subject != "dashboard-test-admin" || len(records[1].Verification) == 0 || records[1].RequestID != "server-test-request" {
 		t.Fatalf("expected actor, verification and request id in completion record %#v", records[1])
+	}
+}
+
+// TestMutationAcceptsURLEncodedOperationReason 验证浏览器安全编码的中文理由会还原后写入审计记录。
+func TestMutationAcceptsURLEncodedOperationReason(t *testing.T) {
+	provider := &fakeProvider{}
+	config := mutationTestAppConfig(t, AppConfig{Provider: provider, ClusterCacheTTL: time.Hour})
+	store := config.AuditStore
+	app := New(config)
+
+	reason := "创建事务 Topic"
+	request := authorizedMutationRequest(http.MethodPost, "/api/topics", bytes.NewBufferString(`{"topic":"codex_transaction_topic","clusterName":"DefaultCluster","readQueueNums":4,"writeQueueNums":4,"perm":6,"attributes":"+message.type=TRANSACTION"}`))
+	request.Header.Del("X-RMQD-Operation-Reason")
+	request.Header.Set("X-RMQD-Operation-Reason-Encoded", url.PathEscape(reason))
+	recorder := httptest.NewRecorder()
+
+	app.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200 for encoded reason, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if provider.upsertTopicCalls != 1 {
+		t.Fatalf("expected one topic upsert, got %d", provider.upsertTopicCalls)
+	}
+	records, err := store.List(context.Background(), "default", 10)
+	if err != nil {
+		t.Fatalf("list audit records: %v", err)
+	}
+	if len(records) != 2 || records[0].Reason != reason || records[1].Reason != reason {
+		t.Fatalf("expected decoded audit reason %q, got %#v", reason, records)
+	}
+}
+
+// TestMutationRejectsMalformedURLEncodedOperationReason 验证无效百分号编码不会绕过审计理由校验。
+func TestMutationRejectsMalformedURLEncodedOperationReason(t *testing.T) {
+	provider := &fakeProvider{}
+	config := mutationTestAppConfig(t, AppConfig{Provider: provider, ClusterCacheTTL: time.Hour})
+	app := New(config)
+	request := authorizedMutationRequest(http.MethodPost, "/api/topics", bytes.NewBufferString(`{"topic":"codex_topic","clusterName":"DefaultCluster","readQueueNums":4,"writeQueueNums":4,"perm":6}`))
+	request.Header.Del("X-RMQD-Operation-Reason")
+	request.Header.Set("X-RMQD-Operation-Reason-Encoded", "%ZZ")
+	recorder := httptest.NewRecorder()
+
+	app.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for malformed reason encoding, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if provider.upsertTopicCalls != 0 {
+		t.Fatalf("expected provider not to be called, got %d", provider.upsertTopicCalls)
 	}
 }

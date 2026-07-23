@@ -114,7 +114,7 @@ async function fetchJSON(url, options = {}) {
       throw new Error("写操作需要填写操作理由");
     }
     headers.Authorization = `Bearer ${token}`;
-    headers["X-RMQD-Operation-Reason"] = reason;
+    headers["X-RMQD-Operation-Reason-Encoded"] = encodeURIComponent(reason);
   }
   let response;
   try {
@@ -2038,6 +2038,18 @@ function handleTopicMutationFieldChange(event) {
   renderTopicMutationSummary();
 }
 
+// topicMutationAttributes 以类型下拉为唯一 message.type 来源，并保留其余高级属性。
+function topicMutationAttributes(messageType, attributes) {
+  const supportedTypes = new Set(["NORMAL", "TRANSACTION", "FIFO", "DELAY"]);
+  const normalizedType = String(messageType || "NORMAL").trim().toUpperCase();
+  const type = supportedTypes.has(normalizedType) ? normalizedType : "NORMAL";
+  const customAttributes = String(attributes || "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter((item) => item && !/^[+-]?message\.type\s*=/i.test(item));
+  return [`+message.type=${type}`, ...customAttributes].join(",");
+}
+
 // topicMutationPayload 从表单提取 updateTopic 所需字段。
 function topicMutationPayload(form) {
   const scope = state.topicMutationScope === "broker" ? "broker" : "cluster";
@@ -2054,7 +2066,7 @@ function topicMutationPayload(form) {
     order: Boolean(form.elements.order.checked),
     unit: Boolean(form.elements.unit.checked),
     hasUnitSub: Boolean(form.elements.hasUnitSub.checked),
-    attributes: String(form.elements.attributes.value || "").trim()
+    attributes: topicMutationAttributes(form.elements.messageType.value, form.elements.attributes.value)
   };
 }
 
