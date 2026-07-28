@@ -69,6 +69,11 @@ const AUDITED_MUTATION_PATHS = new Set([
   "/api/runtime-config/proxy/restart"
 ]);
 
+// pendingAuthTokenPromise 保存当前密码弹框的等待请求，避免重复提交时打开多个弹框。
+let pendingAuthTokenPromise = null;
+let pendingAuthTokenResolve = null;
+let pendingAuthTokenReject = null;
+
 const RUNTIME_CONFIG_ENUMS = {
   brokerrole: ["ASYNC_MASTER", "SYNC_MASTER", "SLAVE"],
   flushdisktype: ["ASYNC_FLUSH", "SYNC_FLUSH"]
@@ -105,10 +110,10 @@ async function fetchJSON(url, options = {}) {
     headers["X-RMQD-Cluster-ID"] = requestedClusterId;
   }
   if (isAuditedMutationAPI(url, method)) {
-    const token = String($("#authTokenInput")?.value || "").trim();
+    let token = String($("#authTokenInput")?.value || "").trim();
     const reason = String($("#operationReasonInput")?.value || "").trim();
     if (!token) {
-      throw new Error("写操作需要访问令牌");
+      token = await requestAuthToken();
     }
     if (!reason) {
       throw new Error("写操作需要填写操作理由");
@@ -134,6 +139,76 @@ async function fetchJSON(url, options = {}) {
     throw new Error(payload.message || `请求失败: ${response.status}`);
   }
   return payload;
+}
+
+// requestAuthToken 在受审计写操作缺少令牌时打开密码弹框，并等待用户确认或取消。
+async function requestAuthToken() {
+  const existingToken = String($("#authTokenInput")?.value || "").trim();
+  if (existingToken) {
+    return existingToken;
+  }
+  if (pendingAuthTokenPromise) {
+    return pendingAuthTokenPromise;
+  }
+
+  const dialog = $("#authTokenDialog");
+  const input = $("#authTokenDialogInput");
+  $("#authTokenDialogStatus").textContent = "输入后将继续本次写操作。";
+  input.value = "";
+  pendingAuthTokenPromise = new Promise((resolve, reject) => {
+    pendingAuthTokenResolve = resolve;
+    pendingAuthTokenReject = reject;
+  });
+  dialog.showModal();
+  requestAnimationFrame(() => input.focus());
+  return pendingAuthTokenPromise;
+}
+
+// finishAuthTokenPrompt 统一结束密码等待状态，确保弹框关闭后不会残留旧 Promise。
+function finishAuthTokenPrompt(token, error) {
+  const dialog = $("#authTokenDialog");
+  const resolve = pendingAuthTokenResolve;
+  const reject = pendingAuthTokenReject;
+  pendingAuthTokenPromise = null;
+  pendingAuthTokenResolve = null;
+  pendingAuthTokenReject = null;
+  $("#authTokenDialogInput").value = "";
+  if (dialog.open) {
+    dialog.close();
+  }
+  if (error) {
+    reject?.(error);
+    return;
+  }
+  resolve?.(token);
+}
+
+// handleAuthTokenDialogSubmit 校验密码并同步到侧栏令牌输入框，再恢复原写操作。
+function handleAuthTokenDialogSubmit(event) {
+  event.preventDefault();
+  const input = $("#authTokenDialogInput");
+  const token = String(input.value || "").trim();
+  if (!token) {
+    $("#authTokenDialogStatus").textContent = "请输入访问密码。";
+    input.focus();
+    return;
+  }
+  $("#authTokenInput").value = token;
+  finishAuthTokenPrompt(token, null);
+}
+
+// cancelAuthTokenPrompt 取消当前密码等待，并阻止对应写请求发送到服务端。
+function cancelAuthTokenPrompt() {
+  if (!pendingAuthTokenPromise) {
+    return;
+  }
+  finishAuthTokenPrompt("", new Error("已取消写操作"));
+}
+
+// handleAuthTokenDialogCancel 接管 Esc 关闭动作，保证等待中的请求收到明确取消结果。
+function handleAuthTokenDialogCancel(event) {
+  event.preventDefault();
+  cancelAuthTokenPrompt();
 }
 
 // apiPath 统一提取相对或绝对 API 地址的路径，以便判断请求的集群和审计边界。
@@ -3978,6 +4053,9 @@ bindTabs();
 bindSubtabs();
 $("#clusterSelect").addEventListener("change", handleClusterSelectionChange);
 $("#detailDialogClose").addEventListener("click", closeDetailDialog);
+$("#authTokenDialogForm").addEventListener("submit", handleAuthTokenDialogSubmit);
+$("#authTokenDialogCancel").addEventListener("click", cancelAuthTokenPrompt);
+$("#authTokenDialog").addEventListener("cancel", handleAuthTokenDialogCancel);
 $("#refreshButton").addEventListener("click", forceRefreshSnapshots);
 $("#proxyRuntimeForm").addEventListener("submit", handleProxyRuntimeSubmit);
 $("#proxyRuntimeForm").addEventListener("change", handleProxyRuntimeFieldChange);

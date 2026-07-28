@@ -964,6 +964,27 @@
       </div>
     </dialog>
 
+    <dialog id="authTokenDialog" class="auth-token-dialog" aria-labelledby="authTokenDialogTitle">
+      <form id="authTokenDialogForm" class="auth-token-dialog-form">
+        <div class="auth-token-dialog-head">
+          <div>
+            <span class="sidebar-label">写操作验证</span>
+            <h2 id="authTokenDialogTitle">请输入访问密码</h2>
+          </div>
+        </div>
+        <label class="auth-token-dialog-field" for="authTokenDialogInput">
+          <span>访问密码</span>
+          <input id="authTokenDialogInput" type="password" autocomplete="off" spellcheck="false" required />
+        </label>
+        <p class="auth-token-dialog-hint">密码和WIFI密码一致</p>
+        <p id="authTokenDialogStatus" class="dialog-status" role="alert" aria-live="polite">输入后将继续本次写操作。</p>
+        <div class="auth-token-dialog-actions">
+          <button id="authTokenDialogCancel" class="button button-secondary" type="button">取消</button>
+          <button class="button button-primary" type="submit">确认并继续</button>
+        </div>
+      </form>
+    </dialog>
+
     <script src="/app.js"></script>
   </body>
 </html>

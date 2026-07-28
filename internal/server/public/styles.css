@@ -380,6 +380,74 @@ a {
   overflow-wrap: anywhere;
 }
 
+/* 密码弹框沿用控制台的紧凑表单视觉，并在窄屏保持完整可操作。 */
+.auth-token-dialog {
+  width: min(440px, calc(100vw - 32px));
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  color: var(--text);
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.auth-token-dialog::backdrop {
+  background: rgba(17, 17, 17, 0.36);
+}
+
+.auth-token-dialog-form {
+  display: grid;
+  gap: 16px;
+  padding: 22px;
+}
+
+.auth-token-dialog-head h2 {
+  margin: 3px 0 0;
+  font-size: 20px;
+  line-height: 1.25;
+}
+
+.auth-token-dialog-field {
+  display: grid;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.auth-token-dialog-field input {
+  width: 100%;
+  min-height: 42px;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  background: var(--surface);
+  font-family: Consolas, "Cascadia Code", monospace;
+  font-size: 14px;
+}
+
+.auth-token-dialog-field input:focus-visible {
+  border-color: var(--accent);
+  outline: 2px solid var(--accent-soft);
+  outline-offset: 1px;
+}
+
+.auth-token-dialog-hint {
+  margin: 0;
+  padding: 10px 12px;
+  border-left: 3px solid var(--accent);
+  color: var(--text);
+  background: var(--accent-soft);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.auth-token-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
 .sidebar-note {
   display: block;
   margin-top: 6px;
@@ -2662,6 +2730,18 @@ td {
 
   .nameserver-dialog-actions .button,
   .dialog-close {
+    width: 100%;
+  }
+
+  .auth-token-dialog-form {
+    padding: 18px;
+  }
+
+  .auth-token-dialog-actions {
+    flex-direction: column-reverse;
+  }
+
+  .auth-token-dialog-actions .button {
     width: 100%;
   }
 

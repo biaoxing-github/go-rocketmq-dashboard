@@ -147,6 +147,44 @@ func TestPublicIndexDefinesFixedClusterAndMutationInputs(t *testing.T) {
 	}
 }
 
+// TestPublicMutationPromptsForMissingCredential 锁定空令牌写操作的密码弹框和请求续执行契约。
+func TestPublicMutationPromptsForMissingCredential(t *testing.T) {
+	index, err := os.ReadFile("public/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{
+		`id="authTokenDialog"`,
+		`id="authTokenDialogForm"`,
+		`id="authTokenDialogInput"`,
+		`id="authTokenDialogCancel"`,
+		"密码和WIFI密码一致",
+	} {
+		if !strings.Contains(string(index), expected) {
+			t.Fatalf("public/index.html should define missing credential prompt %q", expected)
+		}
+	}
+
+	script, err := os.ReadFile("public/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(script)
+	for _, expected := range []string{
+		"async function requestAuthToken",
+		"token = await requestAuthToken()",
+		`$("#authTokenDialogForm").addEventListener("submit"`,
+		`$("#authTokenDialogCancel").addEventListener("click"`,
+	} {
+		if !strings.Contains(source, expected) {
+			t.Fatalf("public/app.js should resume audited writes through credential prompt %q", expected)
+		}
+	}
+	if strings.Contains(source, `throw new Error("写操作需要访问令牌")`) {
+		t.Fatal("public/app.js should prompt for a credential instead of immediately rejecting an audited write")
+	}
+}
+
 func TestPublicAppRendersTransactionP0HealthFields(t *testing.T) {
 	script, err := os.ReadFile("public/app.js")
 	if err != nil {
