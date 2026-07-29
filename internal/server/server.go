@@ -99,6 +99,8 @@ type dashboardConfigPayload struct {
 	Clusters []ClusterDefinition `json:"clusters"`
 	// ClusterManagementEnabled 表示服务端已配置动态集群持久化路径。
 	ClusterManagementEnabled bool `json:"clusterManagementEnabled"`
+	// ManagedClusterIDs 是允许页面修改或删除的持久化集群 ID。
+	ManagedClusterIDs []string `json:"managedClusterIds"`
 }
 
 // topicMessagesIncrementalProvider 表示支持按旧快照复用历史消息 offset 的 Provider。
@@ -196,9 +198,14 @@ func (a *App) configPayload() dashboardConfigPayload {
 	for _, clusterID := range a.clusterOrder {
 		clusters = append(clusters, a.clusters[clusterID].definition)
 	}
+	managedIDs := make([]string, 0, len(a.persistedClusters))
+	for _, definition := range a.persistedClusters {
+		managedIDs = append(managedIDs, definition.ID)
+	}
 	return dashboardConfigPayload{
 		Clusters:                 clusters,
 		ClusterManagementEnabled: a.clusterRegistryPath != "",
+		ManagedClusterIDs:        managedIDs,
 	}
 }
 
@@ -251,6 +258,7 @@ func (a *App) routes() {
 	a.mux.HandleFunc("/api/health", a.handleHealth)
 	a.mux.HandleFunc("/api/config", a.handleConfig)
 	a.mux.HandleFunc("/api/config/clusters", a.handleClusterRegistry)
+	a.mux.HandleFunc("/api/config/clusters/", a.handleClusterRegistryItem)
 	a.mux.HandleFunc("/api/runtime-config", a.clusterScoped(a.handleRuntimeConfig))
 	a.mux.HandleFunc("/api/runtime-config/proxy", a.clusterScoped(a.handleProxyRuntimeConfig))
 	a.mux.HandleFunc("/api/runtime-config/proxy/restart", a.clusterScoped(a.handleProxyRuntimeRestart))

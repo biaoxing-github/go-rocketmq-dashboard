@@ -36,6 +36,16 @@
 - 实现：解析器聚合全部 `RemotingConnectException`，总览按错误文本聚合受影响快照并展示完整 `lastError`。
 - 本地验证：全量 Go 测试、两个 Go 命令构建、JavaScript 语法、Compose 配置和 diff 检查全部通过。
 
+## 2026-07-29T11:22:24+08:00 集群修改与删除（执行者：Devil）
+
+- 前馈读取：项目 AGENTS、Obsidian 项目索引、历史 process/feature 记录和 RocketMQ Dashboard 发布摘要。
+- 代码分析：CodeGraph 仍返回 `Transport closed`，按既有故障记录降级为 PowerShell 定向读取集群注册表、运行时、审计和前端集群切换路径。
+- 后端实现：新增 `PUT /api/config/clusters/{id}` 和 `DELETE /api/config/clusters/{id}`，修改时替换独立 Provider 与快照运行时，删除时同步移除运行时和持久化定义。
+- 边界控制：启动配置集群保持只读；重复 ID、不存在目标、未知字段和多余 JSON 均返回稳定错误，所有写操作继续要求令牌、操作理由和审计记录。
+- 前端实现：集群管理弹框展示全部集群，对页面注册集群提供编辑/删除图标；修改或删除当前集群后同步刷新选择器、会话选择和当前快照。
+- 自动验证：聚焦 API/持久化/前端契约测试、全量 Go 测试、两个 Go 命令构建、JavaScript 语法、Compose 配置和 diff 检查全部通过。
+- 浏览器冒烟：本地 18190 页面可打开集群管理弹框，启动配置集群标记正确且编辑/删除按钮禁用；共享 Browser MCP 被占用，使用独立 Playwright CLI 会话完成验证并清理临时进程与产物。
+
 ## 2026-07-29T11:15:00+08:00 快照错误原因展示生产发布（执行者：Devil）
 
 - Git：提交 `09b19c9` 已推送到 `origin/codex/goadmin-rocksdb-local`。

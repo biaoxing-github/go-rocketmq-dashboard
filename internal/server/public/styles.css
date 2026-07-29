@@ -290,6 +290,123 @@ a {
   gap: 12px;
 }
 
+.cluster-management-section {
+  display: grid;
+  gap: 8px;
+}
+
+.cluster-management-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.cluster-management-section-head strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.cluster-management-list {
+  display: grid;
+  gap: 7px;
+  max-height: 190px;
+  overflow: auto;
+}
+
+.cluster-management-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-soft);
+}
+
+.cluster-management-main {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.cluster-management-main strong,
+.cluster-management-main code,
+.cluster-management-main small {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.cluster-management-main strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.cluster-management-main code,
+.cluster-management-main small {
+  color: var(--muted);
+  font-family: Consolas, "Cascadia Code", monospace;
+  font-size: 11px;
+}
+
+.cluster-management-main small {
+  color: var(--faint);
+  font-family: inherit;
+}
+
+.cluster-management-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 6px;
+}
+
+.cluster-icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--accent-strong);
+  background: var(--surface);
+}
+
+.cluster-icon-button svg {
+  width: 15px;
+  height: 15px;
+}
+
+.cluster-icon-button-danger {
+  color: var(--danger);
+}
+
+.cluster-icon-button:hover:not(:disabled),
+.cluster-icon-button:focus-visible:not(:disabled) {
+  border-color: currentColor;
+  outline: 2px solid var(--accent-soft);
+  outline-offset: 1px;
+}
+
+.cluster-icon-button:disabled {
+  cursor: not-allowed;
+  color: var(--faint);
+  opacity: 0.6;
+}
+
+.cluster-management-empty {
+  padding: 12px;
+  border: 1px dashed var(--border);
+  color: var(--faint);
+  font-size: 12px;
+  text-align: center;
+}
+
 .nameserver-field-grid .nameserver-field:last-child {
   grid-column: 1 / -1;
 }

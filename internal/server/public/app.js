@@ -3,6 +3,7 @@ const state = {
   config: null,
   health: null,
   selectedClusterId: "",
+  clusterEditingID: "",
   clusters: [],
   features: null,
   lastFeaturePayload: null,
@@ -75,6 +76,9 @@ const UNSCOPED_API_PATHS = new Set([
   "/api/config",
   "/api/config/clusters"
 ]);
+
+// CLUSTER_MANAGEMENT_PATH_PREFIX 标记添加、修改、删除集群的控制面路径。
+const CLUSTER_MANAGEMENT_PATH_PREFIX = "/api/config/clusters/";
 
 // pendingAuthTokenPromise 保存当前密码弹框的等待请求，避免重复提交时打开多个弹框。
 let pendingAuthTokenPromise = null;
@@ -230,7 +234,7 @@ function apiPath(url) {
 // isClusterScopedAPI 排除集群注册控制面，其余 API 请求都必须携带稳定 clusterId。
 function isClusterScopedAPI(url) {
   const path = apiPath(url);
-  return path.startsWith("/api/") && !UNSCOPED_API_PATHS.has(path);
+  return path.startsWith("/api/") && !UNSCOPED_API_PATHS.has(path) && !isClusterManagementAPI(url);
 }
 
 // requestClusterId 优先尊重调用方 query 参数，再使用显式参数或当前选择，避免双来源冲突。
@@ -248,7 +252,13 @@ function requestClusterId(url, requestedClusterId) {
 
 // isAuditedMutationAPI 只拦截会改变 RocketMQ 或 Proxy 状态的请求，刷新快照不要求写操作凭据。
 function isAuditedMutationAPI(url, method) {
-  return method !== "GET" && method !== "HEAD" && AUDITED_MUTATION_PATHS.has(apiPath(url));
+  return method !== "GET" && method !== "HEAD" && (AUDITED_MUTATION_PATHS.has(apiPath(url)) || isClusterManagementAPI(url));
+}
+
+// isClusterManagementAPI 识别集群注册表的新增、修改和删除请求。
+function isClusterManagementAPI(url) {
+  const path = apiPath(url);
+  return path === "/api/config/clusters" || path.startsWith(CLUSTER_MANAGEMENT_PATH_PREFIX);
 }
 
 // setLoading 控制按钮加载态，防止重复提交和重复刷新。
@@ -441,13 +451,13 @@ function setSubtab(group, target) {
   }
 }
 
-// configuredDashboardClusters 返回服务启动时固定的集群定义，浏览器不能添加或改写该列表。
+// configuredDashboardClusters 返回服务端当前注册的全部集群定义。
 function configuredDashboardClusters() {
   const clusters = state.config?.clusters;
   return Array.isArray(clusters) ? clusters.filter((cluster) => String(cluster?.id || "").trim()) : [];
 }
 
-// selectedDashboardCluster 从当前稳定 clusterId 找到对应的固定定义。
+// selectedDashboardCluster 从当前稳定 clusterId 找到对应的注册定义。
 function selectedDashboardCluster() {
   const selectedClusterId = String(state.selectedClusterId || "").trim();
   return configuredDashboardClusters().find((cluster) => cluster.id === selectedClusterId) || null;
@@ -487,7 +497,7 @@ function ensureSelectedDashboardCluster() {
   return selected;
 }
 
-// renderClusterSelection 把服务端固定集群定义渲染为本地选择控件，不再提供 NameServer 写入入口。
+// renderClusterSelection 把服务端注册定义渲染为本地选择控件。
 function renderClusterSelection() {
   const select = $("#clusterSelect");
   const selected = ensureSelectedDashboardCluster();
@@ -528,6 +538,7 @@ function renderConfig(payload) {
   state.config = payload.data || {};
   $("#clusterAddButton").disabled = state.config.clusterManagementEnabled !== true;
   renderClusterSelection();
+  renderClusterManagementList();
 }
 
 // switchDashboardCluster 只切换当前浏览器请求携带的 clusterId，重置跨集群选择并并行加载新快照。
@@ -564,14 +575,140 @@ async function loadConfig() {
   renderConfig(payload);
 }
 
-// openClusterAddDialog 打开集群注册表单并聚焦稳定 clusterId 输入框。
+// managedClusterIDs 返回允许页面修改和删除的动态集群 ID 集合。
+function managedClusterIDs() {
+  const ids = state.config?.managedClusterIds;
+  return new Set(Array.isArray(ids) ? ids.map((id) => String(id || "").trim()).filter(Boolean) : []);
+}
+
+// clusterManagementIcon 返回集群管理列表使用的轻量操作图标。
+function clusterManagementIcon(action) {
+  if (action === "edit") {
+    return `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 16.5-.8 3.8 3.8-.8L18.7 7.8a2.1 2.1 0 0 0-3-3L4 16.5Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="m14.5 6.5 3 3" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>`;
+  }
+  return `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h14M10 11v6M14 11v6M8 7l1-2h6l1 2m-9 0 .7 13h8.6L17 7" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+}
+
+// renderClusterManagementList 展示所有集群并仅对页面注册集群开放编辑和删除。
+function renderClusterManagementList() {
+  const list = $("#clusterManagementList");
+  if (!list) {
+    return;
+  }
+  const clusters = configuredDashboardClusters();
+  const managed = managedClusterIDs();
+  $("#clusterManagementCount").textContent = `${clusters.length} 个`;
+  list.innerHTML = clusters.length > 0
+    ? clusters.map((cluster) => {
+      const id = String(cluster.id || "");
+      const editable = managed.has(id);
+      const label = cluster.label || id;
+      const actionState = editable ? "" : " disabled";
+      const source = editable ? "页面注册" : "启动配置";
+      return `<div class="cluster-management-row">
+        <div class="cluster-management-main">
+          <strong>${escapeHTML(label)}</strong>
+          <code>${escapeHTML(id)} · ${escapeHTML(cluster.nameServer || "-")}</code>
+          <small>${source}</small>
+        </div>
+        <div class="cluster-management-actions">
+          <button class="cluster-icon-button" type="button" data-cluster-action="edit" data-cluster-id="${escapeAttr(id)}" aria-label="编辑 ${escapeAttr(label)}" title="编辑集群"${actionState}>${clusterManagementIcon("edit")}</button>
+          <button class="cluster-icon-button cluster-icon-button-danger" type="button" data-cluster-action="delete" data-cluster-id="${escapeAttr(id)}" aria-label="删除 ${escapeAttr(label)}" title="删除集群"${actionState}>${clusterManagementIcon("delete")}</button>
+        </div>
+      </div>`;
+    }).join("")
+    : `<div class="cluster-management-empty">暂无集群</div>`;
+}
+
+// resetClusterManagementForm 将弹框恢复为添加模式。
+function resetClusterManagementForm() {
+  state.clusterEditingID = "";
+  $("#clusterAddForm").reset();
+  $("#clusterAddDialogTitle").textContent = "添加集群";
+  $("#clusterAddSubmit").textContent = "保存并切换";
+  $("#clusterAddCancel").textContent = "取消";
+  $("#clusterAddStatus").textContent = "等待填写";
+}
+
+// startClusterEdit 将动态集群定义加载到同一个表单中。
+function startClusterEdit(clusterID) {
+  if (!managedClusterIDs().has(clusterID)) {
+    $("#clusterAddStatus").textContent = "启动配置集群不可在页面修改";
+    return;
+  }
+  const cluster = configuredDashboardClusters().find((item) => item.id === clusterID);
+  if (!cluster) {
+    $("#clusterAddStatus").textContent = "集群不存在";
+    return;
+  }
+  state.clusterEditingID = clusterID;
+  $("#clusterAddId").value = cluster.id || "";
+  $("#clusterAddLabel").value = cluster.label || "";
+  $("#clusterAddNameServer").value = cluster.nameServer || "";
+  $("#clusterAddDialogTitle").textContent = "修改集群";
+  $("#clusterAddSubmit").textContent = "保存修改";
+  $("#clusterAddCancel").textContent = "取消修改";
+  $("#clusterAddStatus").textContent = "修改集群 ID、显示名称或 NameServer";
+  $("#clusterAddId").focus();
+}
+
+// handleClusterManagementClick 响应集群管理列表中的编辑和删除图标按钮。
+async function handleClusterManagementClick(event) {
+  const button = event.target.closest("[data-cluster-action]");
+  if (!button || button.disabled) {
+    return;
+  }
+  const clusterID = String(button.dataset.clusterId || "").trim();
+  if (button.dataset.clusterAction === "edit") {
+    startClusterEdit(clusterID);
+    return;
+  }
+  if (button.dataset.clusterAction !== "delete") {
+    return;
+  }
+  const cluster = configuredDashboardClusters().find((item) => item.id === clusterID);
+  if (!cluster || !window.confirm(`确定删除集群“${cluster.label || clusterID}”及其连接配置吗？`)) {
+    return;
+  }
+  $("#clusterAddStatus").textContent = "删除中";
+  try {
+    const payload = await fetchJSON(`/api/config/clusters/${encodeURIComponent(clusterID)}`, { method: "DELETE" });
+    const deletingSelected = state.selectedClusterId === clusterID;
+    if (deletingSelected) {
+      state.selectedClusterId = "";
+      state.health = null;
+    }
+    renderConfig(payload);
+    if (deletingSelected && state.selectedClusterId) {
+      await reloadSelectedCluster(state.selectedClusterId);
+    }
+    $("#clusterAddStatus").textContent = "已删除集群";
+  } catch (error) {
+    $("#clusterAddStatus").textContent = errorMessage(error);
+  }
+}
+
+// reloadSelectedCluster 重新拉取当前集群的健康信息和首页快照。
+async function reloadSelectedCluster(clusterID) {
+  state.selectedClusterId = clusterID;
+  state.health = null;
+  resetRuntimeSelections();
+  renderClusterSelection();
+  $("#clusterSwitchStatus").textContent = "加载中";
+  await Promise.allSettled([
+    loadHealth({ clusterId: clusterID }),
+    loadSnapshots({ manageButton: false, clusterId: clusterID })
+  ]);
+}
+
+// openClusterAddDialog 打开集群管理弹框并聚焦稳定 clusterId 输入框。
 function openClusterAddDialog() {
   if ($("#clusterAddButton").disabled) {
     return;
   }
   const dialog = $("#clusterAddDialog");
-  $("#clusterAddForm").reset();
-  $("#clusterAddStatus").textContent = "等待填写";
+  resetClusterManagementForm();
+  renderClusterManagementList();
   dialog.showModal();
   requestAnimationFrame(() => $("#clusterAddId").focus());
 }
@@ -590,7 +727,7 @@ function handleClusterAddDialogCancel(event) {
   closeClusterAddDialog();
 }
 
-// handleClusterAddSubmit 持久化新集群，刷新服务端定义并自动切换到新 clusterId。
+// handleClusterAddSubmit 新增或修改集群，刷新服务端定义并按需切换运行时。
 async function handleClusterAddSubmit(event) {
   event.preventDefault();
   const form = event.currentTarget;
@@ -604,17 +741,32 @@ async function handleClusterAddSubmit(event) {
     $("#clusterAddStatus").textContent = "集群 ID 和 NameServer 为必填项";
     return;
   }
+  const editingID = state.clusterEditingID;
+  const editing = Boolean(editingID);
   setLoading(submit, true);
   $("#clusterAddStatus").textContent = "保存中";
   try {
-    const payload = await fetchJSON("/api/config/clusters", {
-      method: "POST",
+    const endpoint = editing
+      ? `/api/config/clusters/${encodeURIComponent(editingID)}`
+      : "/api/config/clusters";
+    const payload = await fetchJSON(endpoint, {
+      method: editing ? "PUT" : "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(definition)
     });
+    const wasSelected = editing && state.selectedClusterId === editingID;
+    if (wasSelected) {
+      state.selectedClusterId = definition.id;
+    }
     renderConfig(payload);
     closeClusterAddDialog();
-    await switchDashboardCluster(definition.id);
+    if (editing) {
+      if (wasSelected) {
+        await reloadSelectedCluster(definition.id);
+      }
+    } else {
+      await switchDashboardCluster(definition.id);
+    }
   } catch (error) {
     $("#clusterAddStatus").textContent = errorMessage(error);
   } finally {
@@ -4161,6 +4313,7 @@ $("#clusterAddForm").addEventListener("submit", handleClusterAddSubmit);
 $("#clusterAddDialogClose").addEventListener("click", closeClusterAddDialog);
 $("#clusterAddCancel").addEventListener("click", closeClusterAddDialog);
 $("#clusterAddDialog").addEventListener("cancel", handleClusterAddDialogCancel);
+$("#clusterManagementList").addEventListener("click", handleClusterManagementClick);
 $("#detailDialogClose").addEventListener("click", closeDetailDialog);
 $("#authTokenDialogForm").addEventListener("submit", handleAuthTokenDialogSubmit);
 $("#authTokenDialogCancel").addEventListener("click", cancelAuthTokenPrompt);

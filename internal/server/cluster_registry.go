@@ -19,6 +19,10 @@ var (
 	clusterIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 	// errClusterAlreadyExists 区分重复 ID 与持久化 I/O 错误的 HTTP 状态。
 	errClusterAlreadyExists = errors.New("集群 ID 已存在")
+	// errClusterNotFound 表示请求的集群运行时不存在。
+	errClusterNotFound = errors.New("集群不存在")
+	// errClusterImmutable 表示启动环境变量定义的集群不能由页面覆盖。
+	errClusterImmutable = errors.New("启动配置集群不可在页面修改或删除")
 )
 
 // loadClusterDefinitions 读取页面动态添加的集群定义；显式文件损坏时立即终止启动。
@@ -156,25 +160,153 @@ func (a *App) registerCluster(definition ClusterDefinition) (*clusterRuntime, er
 	return runtime, nil
 }
 
+// clusterDefinitionForID 返回集群定义及其是否来自页面注册表。
+func (a *App) clusterDefinitionForID(clusterID string) (ClusterDefinition, bool, bool) {
+	a.clusterMu.RLock()
+	defer a.clusterMu.RUnlock()
+	runtime, exists := a.clusters[clusterID]
+	if !exists {
+		return ClusterDefinition{}, false, false
+	}
+	for _, definition := range a.persistedClusters {
+		if definition.ID == clusterID {
+			return runtime.definition, true, true
+		}
+	}
+	return runtime.definition, true, false
+}
+
+// updateCluster 修改页面注册的集群定义，并替换对应的独立 Provider 和快照仓库。
+func (a *App) updateCluster(previousID string, definition ClusterDefinition) (*clusterRuntime, error) {
+	a.clusterMu.Lock()
+	defer a.clusterMu.Unlock()
+	if _, exists := a.clusters[previousID]; !exists {
+		return nil, fmt.Errorf("%w: %s", errClusterNotFound, previousID)
+	}
+	managedIndex := -1
+	for index, persisted := range a.persistedClusters {
+		if persisted.ID == previousID {
+			managedIndex = index
+			break
+		}
+	}
+	if managedIndex < 0 {
+		return nil, errClusterImmutable
+	}
+	if previousID != definition.ID {
+		if _, exists := a.clusters[definition.ID]; exists {
+			return nil, fmt.Errorf("%w: %s", errClusterAlreadyExists, definition.ID)
+		}
+	}
+	nextPersisted := append([]ClusterDefinition(nil), a.persistedClusters...)
+	nextPersisted[managedIndex] = definition
+	nextPersisted, err := normalizeManagedClusterDefinitions(nextPersisted)
+	if err != nil {
+		return nil, err
+	}
+	if err := saveClusterDefinitions(a.clusterRegistryPath, nextPersisted); err != nil {
+		return nil, err
+	}
+	runtime := newClusterRuntime(definition, a.providerFactory(definition.NameServer), a.clusterCacheTTL, a.messageChainCacheTTL)
+	delete(a.clusters, previousID)
+	a.clusters[definition.ID] = runtime
+	for index, clusterID := range a.clusterOrder {
+		if clusterID == previousID {
+			a.clusterOrder[index] = definition.ID
+			break
+		}
+	}
+	sort.Strings(a.clusterOrder)
+	a.persistedClusters = nextPersisted
+	return runtime, nil
+}
+
+// deleteCluster 删除页面注册的集群及其独立运行时，并保留启动配置集群。
+func (a *App) deleteCluster(clusterID string) error {
+	a.clusterMu.Lock()
+	defer a.clusterMu.Unlock()
+	if _, exists := a.clusters[clusterID]; !exists {
+		return fmt.Errorf("%w: %s", errClusterNotFound, clusterID)
+	}
+	managedIndex := -1
+	for index, definition := range a.persistedClusters {
+		if definition.ID == clusterID {
+			managedIndex = index
+			break
+		}
+	}
+	if managedIndex < 0 {
+		return errClusterImmutable
+	}
+	nextPersisted := append([]ClusterDefinition(nil), a.persistedClusters[:managedIndex]...)
+	nextPersisted = append(nextPersisted, a.persistedClusters[managedIndex+1:]...)
+	if err := saveClusterDefinitions(a.clusterRegistryPath, nextPersisted); err != nil {
+		return err
+	}
+	delete(a.clusters, clusterID)
+	for index, currentID := range a.clusterOrder {
+		if currentID == clusterID {
+			a.clusterOrder = append(a.clusterOrder[:index], a.clusterOrder[index+1:]...)
+			break
+		}
+	}
+	a.persistedClusters = nextPersisted
+	return nil
+}
+
+// clusterIDFromPath 提取并校验 /api/config/clusters/{id} 路径中的动态集群 ID。
+func clusterIDFromPath(r *http.Request) (string, error) {
+	clusterID := strings.TrimPrefix(r.URL.Path, "/api/config/clusters/")
+	clusterID = strings.TrimSuffix(clusterID, "/")
+	if clusterID == "" || strings.Contains(clusterID, "/") {
+		return "", errors.New("集群路径 ID 无效")
+	}
+	return clusterID, nil
+}
+
+// decodeClusterDefinition 解码修改集群所需的完整定义，并拒绝未知字段和多余 JSON。
+func decodeClusterDefinition(r *http.Request) (ClusterDefinition, error) {
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	var request ClusterDefinition
+	if err := decoder.Decode(&request); err != nil {
+		return ClusterDefinition{}, errors.New("请求体必须是集群定义 JSON")
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		return ClusterDefinition{}, errors.New("请求体只能包含一个集群定义")
+	}
+	return normalizeManagedClusterDefinition(request)
+}
+
+// clusterMutationStatus 将集群管理错误转换为稳定的 API 状态码。
+func clusterMutationStatus(err error) int {
+	switch {
+	case errors.Is(err, errClusterNotFound):
+		return http.StatusNotFound
+	case errors.Is(err, errClusterAlreadyExists), errors.Is(err, errClusterImmutable):
+		return http.StatusConflict
+	default:
+		return http.StatusServiceUnavailable
+	}
+}
+
+// writeClusterConfigResponse 返回修改或删除后的全量集群配置，前端据此刷新选择器。
+func (a *App) writeClusterConfigResponse(w http.ResponseWriter, status int) {
+	writeJSON(w, status, responsePayload[dashboardConfigPayload]{
+		Code:    0,
+		Message: "ok",
+		Data:    a.configPayload(),
+	})
+}
+
 // handleClusterRegistry 新增一个可跨容器重启恢复的集群运行时。
 func (a *App) handleClusterRegistry(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, errors.New("仅支持 POST"))
 		return
 	}
-	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
-	var request ClusterDefinition
-	if err := decoder.Decode(&request); err != nil {
-		writeError(w, http.StatusBadRequest, errors.New("请求体必须是集群定义 JSON"))
-		return
-	}
-	var extra any
-	if err := decoder.Decode(&extra); err != io.EOF {
-		writeError(w, http.StatusBadRequest, errors.New("请求体只能包含一个集群定义"))
-		return
-	}
-	definition, err := normalizeManagedClusterDefinition(request)
+	definition, err := decodeClusterDefinition(r)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
@@ -209,4 +341,69 @@ func (a *App) handleClusterRegistry(w http.ResponseWriter, r *http.Request) {
 		Message: "ok",
 		Data:    a.configPayload(),
 	})
+}
+
+// handleClusterRegistryItem 修改或删除一个页面注册的集群定义。
+func (a *App) handleClusterRegistryItem(w http.ResponseWriter, r *http.Request) {
+	clusterID, err := clusterIDFromPath(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	before, exists, _ := a.clusterDefinitionForID(clusterID)
+	switch r.Method {
+	case http.MethodPut:
+		definition, decodeErr := decodeClusterDefinition(r)
+		if decodeErr != nil {
+			writeError(w, http.StatusBadRequest, decodeErr)
+			return
+		}
+		audit, auditErr := a.beginMutationForCluster(r, PermissionRuntimeConfig, "cluster.update", clusterID, clusterID, before)
+		if auditErr != nil {
+			writeMutationAdmissionError(w, auditErr)
+			return
+		}
+		w.Header().Set("X-RMQD-Operation-ID", audit.record.OperationID)
+		runtime, updateErr := a.updateCluster(clusterID, definition)
+		if updateErr != nil {
+			if completeErr := audit.complete(r.Context(), nil, nil, updateErr, false); completeErr != nil {
+				writeError(w, http.StatusServiceUnavailable, fmt.Errorf("修改失败且审计完成记录失败: %v; %w", updateErr, completeErr))
+				return
+			}
+			writeError(w, clusterMutationStatus(updateErr), updateErr)
+			return
+		}
+		runtime.refreshSnapshots(context.Background())
+		if completeErr := audit.complete(r.Context(), definition, map[string]any{"updated": true, "clusterId": definition.ID}, nil, false); completeErr != nil {
+			writeError(w, http.StatusServiceUnavailable, fmt.Errorf("集群已修改，但审计完成记录失败: %w", completeErr))
+			return
+		}
+		a.writeClusterConfigResponse(w, http.StatusOK)
+	case http.MethodDelete:
+		if !exists {
+			writeError(w, http.StatusNotFound, fmt.Errorf("%w: %s", errClusterNotFound, clusterID))
+			return
+		}
+		audit, auditErr := a.beginMutationForCluster(r, PermissionRuntimeConfig, "cluster.delete", clusterID, clusterID, before)
+		if auditErr != nil {
+			writeMutationAdmissionError(w, auditErr)
+			return
+		}
+		w.Header().Set("X-RMQD-Operation-ID", audit.record.OperationID)
+		if deleteErr := a.deleteCluster(clusterID); deleteErr != nil {
+			if completeErr := audit.complete(r.Context(), nil, nil, deleteErr, false); completeErr != nil {
+				writeError(w, http.StatusServiceUnavailable, fmt.Errorf("删除失败且审计完成记录失败: %v; %w", deleteErr, completeErr))
+				return
+			}
+			writeError(w, clusterMutationStatus(deleteErr), deleteErr)
+			return
+		}
+		if completeErr := audit.complete(r.Context(), nil, map[string]any{"deleted": true, "clusterId": clusterID}, nil, false); completeErr != nil {
+			writeError(w, http.StatusServiceUnavailable, fmt.Errorf("集群已删除，但审计完成记录失败: %w", completeErr))
+			return
+		}
+		a.writeClusterConfigResponse(w, http.StatusOK)
+	default:
+		writeError(w, http.StatusMethodNotAllowed, errors.New("仅支持 PUT 或 DELETE"))
+	}
 }
