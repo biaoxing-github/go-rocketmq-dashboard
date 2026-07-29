@@ -5,6 +5,7 @@
 ## 能做什么
 
 - 浏览集群、Topic、Consumer 和消息链路
+- 从页面添加并持久化多个 RocketMQ 集群连接
 - 通过 `goadmin` 执行和官方 `mqadmin` 兼容的只读命令
 - 支持 Docker 部署
 
@@ -54,6 +55,8 @@ Docker Compose 默认使用 `host.docker.internal:9876` 连接宿主机 NameServ
 - `RMQD_ADDR`
 - `RMQD_NAMESRV`
 - `RMQD_NAMESRV_OPTIONS`
+- `RMQD_CLUSTERS_JSON`
+- `RMQD_CLUSTER_REGISTRY_PATH`
 - `RMQD_ADMIN_PROVIDER`
 - `RMQD_ADMIN_SIDECAR_ENABLED`
 

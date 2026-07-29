@@ -85,6 +85,7 @@ ENV HOME=/app \
     RMQD_ADMIN_SIDECAR_MAIN_CLASS=dev.codex.rocketmq.AdminSidecar \
     RMQD_ADMIN_SIDECAR_TIMEOUT_MS=3000 \
     RMQD_RUNTIME_CONFIG_ENABLED=false \
+    RMQD_CLUSTER_REGISTRY_PATH=/app/runtime/clusters.json \
     RMQD_PROXY_RUNTIME_DIR=/app/runtime \
     RMQD_PROXY_ROCKETMQ_HOME=/opt/rocketmq \
     RMQD_PROXY_EXTERNAL_HOST=127.0.0.1 \

@@ -17,3 +17,11 @@
 - 校正部署：读取远端 `docker-compose config --services` 得到真实服务名 `rocketmq-go-dashboard`，重新执行候选校验、备份、替换和健康等待；备份为 `docker-compose.yml.bak.20260728124429-auth-prompt`。
 - 生产验证：新容器 running/healthy、restart=0、北京时间正确；凭据只读挂载和运行卷保持不变，18080/18085/18090 均可达，健康接口返回 code=0 和 3 个固定集群。
 - 浏览器验证：桌面与 390x844 移动端均显示密码弹框和 WIFI 提示；取消不发送，错误令牌确认后返回“身份凭据无效”，控制台 0 error/0 warn，测试 Topic 未创建。
+
+## 2026-07-29T10:21:33+08:00 页面添加集群与基础镜像推送（执行者：Devil）
+
+- 前馈读取：项目 AGENTS、Obsidian 项目索引、历史 process/feature 记录和 RocketMQ Dashboard rollout 摘要。
+- 代码分析：CodeGraph 定位固定 clusterId 请求隔离、ProviderFactory、clusterMu、配置 API 和前端集群切换链路。
+- 功能实现：新增服务端集群注册表、受令牌和操作理由保护的注册接口、独立运行时创建、持久卷恢复，以及页面添加集群弹框和自动切换。
+- 配置文档：新增 RMQD_CLUSTER_REGISTRY_PATH，Compose 与镜像默认保存到 /app/runtime/clusters.json，并修正多集群使用说明。
+- 用户边界：按明确要求不运行测试、构建、语法检查、Compose 检查或浏览器验证；完成后直接提交推送，验证由用户执行。

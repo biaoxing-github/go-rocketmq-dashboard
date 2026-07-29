@@ -46,15 +46,25 @@ type AppConfig struct {
 	AuditStore AuditStore
 	// AuditLogPath 是未显式注入 AuditStore 时的 JSONL 持久化路径。
 	AuditLogPath string
+	// ClusterRegistryPath 保存页面动态添加且需要跨重启恢复的集群定义。
+	ClusterRegistryPath string
 }
 
 // App 承载 Dashboard HTTP 路由、RocketMQ Provider 和热点快照仓库。
 type App struct {
-	mux                  *http.ServeMux
-	clusterMu            sync.RWMutex
-	providerFactory      func(nameServer string) rocketmq.Provider
-	clusters             map[string]*clusterRuntime
-	clusterOrder         []string
+	mux             *http.ServeMux
+	clusterMu       sync.RWMutex
+	providerFactory func(nameServer string) rocketmq.Provider
+	clusters        map[string]*clusterRuntime
+	clusterOrder    []string
+	// clusterCacheTTL 是动态注册运行时使用的核心快照缓存时间。
+	clusterCacheTTL time.Duration
+	// messageChainCacheTTL 是动态注册运行时使用的消息链路缓存时间。
+	messageChainCacheTTL time.Duration
+	// clusterRegistryPath 是页面新增集群的持久化文件路径。
+	clusterRegistryPath string
+	// persistedClusters 只包含页面新增定义，不重复保存启动环境变量中的集群。
+	persistedClusters    []ClusterDefinition
 	latencyBudget        time.Duration
 	runtimeConfigEnabled bool
 	authenticator        Authenticator
@@ -83,9 +93,12 @@ type refreshTriggerPayload struct {
 	Features  bool `json:"features"`
 }
 
-// dashboardConfigPayload 返回启动时固定的集群列表，前端只在本会话中选择 clusterId。
+// dashboardConfigPayload 返回当前已注册集群列表和控制面写入能力。
 type dashboardConfigPayload struct {
+	// Clusters 是请求可选择的全部集群运行时定义。
 	Clusters []ClusterDefinition `json:"clusters"`
+	// ClusterManagementEnabled 表示服务端已配置动态集群持久化路径。
+	ClusterManagementEnabled bool `json:"clusterManagementEnabled"`
 }
 
 // topicMessagesIncrementalProvider 表示支持按旧快照复用历史消息 offset 的 Provider。
@@ -127,18 +140,24 @@ func New(config AppConfig) *App {
 	if auditStore == nil {
 		auditStore = NewFileAuditStore(config.AuditLogPath)
 	}
-	definitions := normalizeClusterDefinitions(config.Clusters, config.NameServer, config.NameServerOptions)
+	baseDefinitions := normalizeClusterDefinitions(config.Clusters, config.NameServer, config.NameServerOptions)
+	persistedDefinitions := loadClusterDefinitions(config.ClusterRegistryPath)
+	definitions := mergeClusterDefinitions(baseDefinitions, persistedDefinitions)
+	chainTTL := messageChainCacheTTL(config.MessageChainCacheTTL, ttl)
 	app := &App{
 		mux:                  http.NewServeMux(),
 		providerFactory:      providerFactory,
 		clusters:             make(map[string]*clusterRuntime, len(definitions)),
 		clusterOrder:         make([]string, 0, len(definitions)),
+		clusterCacheTTL:      ttl,
+		messageChainCacheTTL: chainTTL,
+		clusterRegistryPath:  strings.TrimSpace(config.ClusterRegistryPath),
+		persistedClusters:    append([]ClusterDefinition(nil), persistedDefinitions...),
 		latencyBudget:        budget,
 		runtimeConfigEnabled: config.RuntimeConfigEnabled,
 		authenticator:        authenticator,
 		auditStore:           auditStore,
 	}
-	chainTTL := messageChainCacheTTL(config.MessageChainCacheTTL, ttl)
 	for _, definition := range definitions {
 		runtime := newClusterRuntime(definition, providerFactory(definition.NameServer), ttl, chainTTL)
 		runtime.proxyRuntime = config.ProxyRuntimes[definition.ID]
@@ -177,7 +196,10 @@ func (a *App) configPayload() dashboardConfigPayload {
 	for _, clusterID := range a.clusterOrder {
 		clusters = append(clusters, a.clusters[clusterID].definition)
 	}
-	return dashboardConfigPayload{Clusters: clusters}
+	return dashboardConfigPayload{
+		Clusters:                 clusters,
+		ClusterManagementEnabled: a.clusterRegistryPath != "",
+	}
 }
 
 // clusterScoped 将请求解析到固定集群运行时，后续 handler 不再读取任何全局 Provider。
@@ -228,6 +250,7 @@ func clusterRuntimeFromContext(ctx context.Context) *clusterRuntime {
 func (a *App) routes() {
 	a.mux.HandleFunc("/api/health", a.handleHealth)
 	a.mux.HandleFunc("/api/config", a.handleConfig)
+	a.mux.HandleFunc("/api/config/clusters", a.handleClusterRegistry)
 	a.mux.HandleFunc("/api/runtime-config", a.clusterScoped(a.handleRuntimeConfig))
 	a.mux.HandleFunc("/api/runtime-config/proxy", a.clusterScoped(a.handleProxyRuntimeConfig))
 	a.mux.HandleFunc("/api/runtime-config/proxy/restart", a.clusterScoped(a.handleProxyRuntimeRestart))

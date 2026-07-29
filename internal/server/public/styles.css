@@ -214,6 +214,10 @@ a {
 }
 
 .nameserver-open {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
   width: 100%;
   min-height: 32px;
   padding: 7px 10px;
@@ -227,6 +231,11 @@ a {
 
 .nameserver-open:hover {
   border-color: var(--surface-strong);
+}
+
+.nameserver-open:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 
 .nameserver-dialog {
@@ -279,6 +288,10 @@ a {
   display: grid;
   grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.2fr);
   gap: 12px;
+}
+
+.nameserver-field-grid .nameserver-field:last-child {
+  grid-column: 1 / -1;
 }
 
 .nameserver-field {
@@ -378,6 +391,12 @@ a {
   color: var(--muted);
   font-size: 12px;
   overflow-wrap: anywhere;
+}
+
+.nameserver-open svg {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
 }
 
 /* 密码弹框沿用控制台的紧凑表单视觉，并在窄屏保持完整可操作。 */

@@ -346,6 +346,11 @@ func (a *App) beginMutation(r *http.Request, permission Permission, action strin
 	if runtime != nil {
 		clusterID = runtime.definition.ID
 	}
+	return a.beginMutationForCluster(r, permission, action, target, clusterID, before)
+}
+
+// beginMutationForCluster 允许控制面在集群运行时创建前写入明确的 clusterId 审计记录。
+func (a *App) beginMutationForCluster(r *http.Request, permission Permission, action string, target string, clusterID string, before any) (*mutationAudit, error) {
 	principal, err := a.authenticator.Authenticate(r)
 	if err != nil {
 		a.appendDeniedAudit(r.Context(), clusterID, action, target, Principal{Subject: "anonymous"}, err)

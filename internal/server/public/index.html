@@ -34,9 +34,17 @@
         <section class="sidebar-stack">
           <div class="sidebar-block">
             <label class="sidebar-label" for="clusterSelect">集群</label>
-            <select id="clusterSelect" class="sidebar-select" aria-label="选择固定集群" disabled>
-              <option>加载固定集群</option>
+            <select id="clusterSelect" class="sidebar-select" aria-label="选择集群" disabled>
+              <option>加载集群</option>
             </select>
+            <div class="nameserver-actions">
+              <button id="clusterAddButton" class="nameserver-open" type="button" disabled>
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+                </svg>
+                <span>添加集群</span>
+              </button>
+            </div>
             <span class="sidebar-label">NameServer</span>
             <strong id="nameServer">-</strong>
             <span id="clusterSwitchStatus" class="sidebar-note">等待配置</span>
@@ -65,7 +73,7 @@
             <p class="eyebrow">RocketMQ 控制台</p>
             <h1>集群消息运维台</h1>
             <p class="lead">
-              选择固定集群后，直接浏览 Topic 保留窗口内的消息，并从消息行跳转到状态链路。
+              选择已注册集群后，直接浏览 Topic 保留窗口内的消息，并从消息行跳转到状态链路。
             </p>
           </div>
           <div class="topbar-actions">
@@ -950,6 +958,37 @@
         </section>
       </main>
     </div>
+
+    <dialog id="clusterAddDialog" class="nameserver-dialog" aria-labelledby="clusterAddDialogTitle">
+      <form id="clusterAddForm" class="nameserver-dialog-form">
+        <div class="nameserver-dialog-head">
+          <div>
+            <span class="sidebar-label">集群管理</span>
+            <h2 id="clusterAddDialogTitle">添加集群</h2>
+          </div>
+          <button id="clusterAddDialogClose" class="dialog-close" type="button">关闭</button>
+        </div>
+        <div class="nameserver-field-grid">
+          <label class="nameserver-field" for="clusterAddId">
+            <span>集群 ID</span>
+            <input id="clusterAddId" name="id" maxlength="64" autocomplete="off" placeholder="prod-east" required />
+          </label>
+          <label class="nameserver-field" for="clusterAddLabel">
+            <span>显示名称</span>
+            <input id="clusterAddLabel" name="label" maxlength="80" autocomplete="off" placeholder="生产集群" />
+          </label>
+          <label class="nameserver-field" for="clusterAddNameServer">
+            <span>NameServer</span>
+            <input id="clusterAddNameServer" name="nameServer" autocomplete="off" spellcheck="false" placeholder="172.168.1.93:9876" required />
+          </label>
+        </div>
+        <p id="clusterAddStatus" class="dialog-status" role="alert" aria-live="polite">等待填写</p>
+        <div class="nameserver-dialog-actions">
+          <button class="button button-secondary" id="clusterAddCancel" type="button">取消</button>
+          <button class="button button-primary" id="clusterAddSubmit" type="submit">保存并切换</button>
+        </div>
+      </form>
+    </dialog>
 
     <dialog id="detailDialog" class="detail-dialog" aria-labelledby="detailDialogTitle">
       <div class="detail-dialog-shell">

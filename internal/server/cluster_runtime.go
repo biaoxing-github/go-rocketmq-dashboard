@@ -12,8 +12,8 @@ import (
 	"rocketmq-go-dashboard/internal/rocketmq"
 )
 
-// ClusterDefinition 描述一个可由 Dashboard 管理的固定 RocketMQ 集群。
-// 集群列表仅在启动时加载，避免某个浏览器请求修改其他用户的运行目标。
+// ClusterDefinition 描述一个由 Dashboard 独立运行时管理的 RocketMQ 集群。
+// 定义可来自启动配置或持久化注册表，所有请求仍通过稳定 clusterId 隔离。
 type ClusterDefinition struct {
 	// ID 是 API 请求携带的稳定集群标识。
 	ID string `json:"id"`

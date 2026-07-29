@@ -51,6 +51,8 @@ type Config struct {
 	AuthCredentialsFile string
 	// AuditLogPath 是持久化 JSONL 审计日志路径。
 	AuditLogPath string
+	// ClusterRegistryPath 保存页面动态添加的集群定义。
+	ClusterRegistryPath string
 	// ProxyRuntimeDir 保存 Proxy 持久化状态、生成配置和运行日志。
 	ProxyRuntimeDir string
 	// ProxyClusterID 指定容器内单个 Proxy 运行器归属的固定 clusterId。
@@ -75,6 +77,7 @@ type Config struct {
 
 // Load 从环境变量读取配置，并填充本地开发可直接运行的默认值。
 func Load() Config {
+	proxyRuntimeDir := getenv("RMQD_PROXY_RUNTIME_DIR", defaultProxyRuntimeDir())
 	return Config{
 		Addr:                 getenv("RMQD_ADDR", ":18090"),
 		NameServer:           getenv("RMQD_NAMESRV", "127.0.0.1:9876"),
@@ -101,7 +104,8 @@ func Load() Config {
 		RuntimeConfigEnabled:  boolFromEnv("RMQD_RUNTIME_CONFIG_ENABLED", false),
 		AuthCredentialsFile:   strings.TrimSpace(os.Getenv("RMQD_AUTH_CREDENTIALS_FILE")),
 		AuditLogPath:          strings.TrimSpace(getenv("RMQD_AUDIT_LOG_PATH", defaultAuditLogPath())),
-		ProxyRuntimeDir:       getenv("RMQD_PROXY_RUNTIME_DIR", defaultProxyRuntimeDir()),
+		ClusterRegistryPath:   strings.TrimSpace(getenv("RMQD_CLUSTER_REGISTRY_PATH", filepath.Join(proxyRuntimeDir, "clusters.json"))),
+		ProxyRuntimeDir:       proxyRuntimeDir,
 		ProxyClusterID:        strings.TrimSpace(os.Getenv("RMQD_PROXY_CLUSTER_ID")),
 		ProxyRocketMQHome:     getenv("RMQD_PROXY_ROCKETMQ_HOME", getenv("ROCKETMQ_HOME", "/opt/rocketmq")),
 		ProxyExternalHost:     strings.TrimSpace(getenv("RMQD_PROXY_EXTERNAL_HOST", "127.0.0.1")),

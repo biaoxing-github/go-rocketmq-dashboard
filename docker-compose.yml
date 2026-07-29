@@ -28,6 +28,7 @@ services:
       RMQD_CLUSTERS_JSON: "${RMQD_CLUSTERS_JSON:-}"
       RMQD_AUTH_CREDENTIALS_FILE: "${RMQD_AUTH_CREDENTIALS_FILE:-}"
       RMQD_AUDIT_LOG_PATH: "${RMQD_AUDIT_LOG_PATH:-/app/runtime/audit.jsonl}"
+      RMQD_CLUSTER_REGISTRY_PATH: "${RMQD_CLUSTER_REGISTRY_PATH:-/app/runtime/clusters.json}"
       RMQD_JAVA: "java"
       RMQD_MQADMIN_CLASSPATH: "/opt/rocketmq/lib/*"
       RMQD_ROCKETMQ_VERSION: "${RMQD_ROCKETMQ_VERSION:-5.3.2}"

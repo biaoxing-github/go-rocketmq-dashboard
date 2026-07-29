@@ -100,6 +100,7 @@ func main() {
 		ProxyRuntimes:        proxyRuntimes,
 		Authenticator:        authenticator,
 		AuditLogPath:         cfg.AuditLogPath,
+		ClusterRegistryPath:  cfg.ClusterRegistryPath,
 	})
 
 	log.Printf("RocketMQ Go Dashboard listening on %s, configuredClusters=%d", cfg.Addr, len(clusters))

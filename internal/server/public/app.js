@@ -61,12 +61,19 @@ const CLUSTER_STORAGE_KEY = "rmqdash.clusterId";
 
 // AUDITED_MUTATION_PATHS 列出会改变 RocketMQ 或 Proxy 运行状态、因而需要身份和审计原因的接口。
 const AUDITED_MUTATION_PATHS = new Set([
+  "/api/config/clusters",
   "/api/topics",
   "/api/topic-messages/send",
   "/api/consumer-offset/reset",
   "/api/runtime-config",
   "/api/runtime-config/proxy",
   "/api/runtime-config/proxy/restart"
+]);
+
+// UNSCOPED_API_PATHS 是不依赖现有 clusterId 的控制面接口。
+const UNSCOPED_API_PATHS = new Set([
+  "/api/config",
+  "/api/config/clusters"
 ]);
 
 // pendingAuthTokenPromise 保存当前密码弹框的等待请求，避免重复提交时打开多个弹框。
@@ -220,10 +227,10 @@ function apiPath(url) {
   }
 }
 
-// isClusterScopedAPI 排除固定集群定义接口，其余 API 请求都必须携带稳定 clusterId。
+// isClusterScopedAPI 排除集群注册控制面，其余 API 请求都必须携带稳定 clusterId。
 function isClusterScopedAPI(url) {
   const path = apiPath(url);
-  return path.startsWith("/api/") && path !== "/api/config";
+  return path.startsWith("/api/") && !UNSCOPED_API_PATHS.has(path);
 }
 
 // requestClusterId 优先尊重调用方 query 参数，再使用显式参数或当前选择，避免双来源冲突。
@@ -516,9 +523,10 @@ async function loadHealth(options = {}) {
   return payload;
 }
 
-// renderConfig 接收只读集群定义并确定首次可用的本地选择。
+// renderConfig 接收已注册集群定义并确定首次可用的本地选择。
 function renderConfig(payload) {
   state.config = payload.data || {};
+  $("#clusterAddButton").disabled = state.config.clusterManagementEnabled !== true;
   renderClusterSelection();
 }
 
@@ -554,6 +562,64 @@ async function switchDashboardCluster(nextClusterId) {
 async function loadConfig() {
   const payload = await fetchJSON("/api/config");
   renderConfig(payload);
+}
+
+// openClusterAddDialog 打开集群注册表单并聚焦稳定 clusterId 输入框。
+function openClusterAddDialog() {
+  if ($("#clusterAddButton").disabled) {
+    return;
+  }
+  const dialog = $("#clusterAddDialog");
+  $("#clusterAddForm").reset();
+  $("#clusterAddStatus").textContent = "等待填写";
+  dialog.showModal();
+  requestAnimationFrame(() => $("#clusterAddId").focus());
+}
+
+// closeClusterAddDialog 关闭集群注册表单。
+function closeClusterAddDialog() {
+  const dialog = $("#clusterAddDialog");
+  if (dialog.open) {
+    dialog.close();
+  }
+}
+
+// handleClusterAddDialogCancel 接管 Esc，确保弹框状态和显式取消一致。
+function handleClusterAddDialogCancel(event) {
+  event.preventDefault();
+  closeClusterAddDialog();
+}
+
+// handleClusterAddSubmit 持久化新集群，刷新服务端定义并自动切换到新 clusterId。
+async function handleClusterAddSubmit(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const submit = $("#clusterAddSubmit");
+  const definition = {
+    id: String(form.elements.id.value || "").trim(),
+    label: String(form.elements.label.value || "").trim(),
+    nameServer: String(form.elements.nameServer.value || "").trim()
+  };
+  if (!definition.id || !definition.nameServer) {
+    $("#clusterAddStatus").textContent = "集群 ID 和 NameServer 为必填项";
+    return;
+  }
+  setLoading(submit, true);
+  $("#clusterAddStatus").textContent = "保存中";
+  try {
+    const payload = await fetchJSON("/api/config/clusters", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(definition)
+    });
+    renderConfig(payload);
+    closeClusterAddDialog();
+    await switchDashboardCluster(definition.id);
+  } catch (error) {
+    $("#clusterAddStatus").textContent = errorMessage(error);
+  } finally {
+    setLoading(submit, false);
+  }
 }
 
 // currentNameServer 优先显示当前 clusterId 的实时健康结果，缺失时回退到固定定义。
@@ -4052,6 +4118,11 @@ async function initializeDashboard() {
 bindTabs();
 bindSubtabs();
 $("#clusterSelect").addEventListener("change", handleClusterSelectionChange);
+$("#clusterAddButton").addEventListener("click", openClusterAddDialog);
+$("#clusterAddForm").addEventListener("submit", handleClusterAddSubmit);
+$("#clusterAddDialogClose").addEventListener("click", closeClusterAddDialog);
+$("#clusterAddCancel").addEventListener("click", closeClusterAddDialog);
+$("#clusterAddDialog").addEventListener("cancel", handleClusterAddDialogCancel);
 $("#detailDialogClose").addEventListener("click", closeDetailDialog);
 $("#authTokenDialogForm").addEventListener("submit", handleAuthTokenDialogSubmit);
 $("#authTokenDialogCancel").addEventListener("click", cancelAuthTokenPrompt);

@@ -96,6 +96,8 @@ docker compose logs -f rocketmq-dashboard
 | `RMQD_ADDR` | `:18090` | 容器内 HTTP 监听地址 |
 | `RMQD_NAMESRV` | `host.docker.internal:9876` | 首次启动连接的 RocketMQ NameServer |
 | `RMQD_NAMESRV_OPTIONS` | `host.docker.internal:9876` | 启动时的候选 NameServer 列表，多个地址用逗号分隔 |
+| `RMQD_CLUSTERS_JSON` | 空 | 启动时固定加载的集群定义 JSON 数组 |
+| `RMQD_CLUSTER_REGISTRY_PATH` | `/app/runtime/clusters.json` | 页面动态添加集群的持久化文件，默认位于 Compose 持久卷 |
 | `RMQD_ROCKETMQ_VERSION` | `5.3.2` | RocketMQ tools 版本 |
 | `RMQD_REQUEST_TIMEOUT_MS` | `60000` | mqadmin 单次命令超时时间 |
 | `RMQD_CLUSTER_CACHE_TTL_MS` | `30000` | 集群快照缓存时间 |
@@ -128,7 +130,9 @@ $env:RMQD_NAMESRV = "host.docker.internal:9876"
 
 ## 多集群使用
 
-容器启动后仍然支持页面里的“添加 / 切换集群”弹窗。`RMQD_NAMESRV` 只决定默认连接，`RMQD_NAMESRV_OPTIONS` 只决定启动候选；用户在页面里添加的 NameServer 会保存在浏览器本地。
+容器启动后可在左侧集群选择器下点击“添加集群”，填写稳定集群 ID、显示名称和 NameServer。新增定义由服务端写入 `RMQD_CLUSTER_REGISTRY_PATH`，注册独立 Provider 和快照缓存后立即出现在所有用户的集群列表中，并在容器重启后从持久卷恢复。
+
+`RMQD_NAMESRV` 和 `RMQD_NAMESRV_OPTIONS` 用于兼容单集群或旧部署；`RMQD_CLUSTERS_JSON` 用于声明启动时固定集群。页面新增集群只写入注册表，不修改这些启动环境变量。
 
 ## goadmin CLI
 
