@@ -25,3 +25,4 @@
 - 功能实现：新增服务端集群注册表、受令牌和操作理由保护的注册接口、独立运行时创建、持久卷恢复，以及页面添加集群弹框和自动切换。
 - 配置文档：新增 RMQD_CLUSTER_REGISTRY_PATH，Compose 与镜像默认保存到 /app/runtime/clusters.json，并修正多集群使用说明。
 - 用户边界：按明确要求不运行测试、构建、语法检查、Compose 检查或浏览器验证；完成后直接提交推送，验证由用户执行。
+- 发布构建排障：默认 proxy.golang.org 下载多个模块时返回 unexpected EOF；使用同一 Harbor Go 基础镜像确认 goproxy.cn 可下载后，为 Dockerfile 和 Compose 增加可覆盖 GOPROXY 构建参数。

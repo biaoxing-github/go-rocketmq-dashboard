@@ -7,10 +7,12 @@ ARG JAVA_IMAGE=eclipse-temurin:17-jdk-jammy
 
 FROM ${GO_IMAGE} AS builder
 
+ARG GOPROXY=https://goproxy.cn,direct
+
 WORKDIR /src
 
 COPY go.mod ./
-RUN go mod download
+RUN GOPROXY="${GOPROXY}" go mod download
 
 COPY . .
 

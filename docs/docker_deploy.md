@@ -115,6 +115,7 @@ docker compose logs -f rocketmq-dashboard
 | 构建变量 | 默认值 | 说明 |
 | --- | --- | --- |
 | `GO_IMAGE` | `golang:1.25-bookworm` | Go 编译阶段基础镜像，可替换为内网镜像 |
+| `GOPROXY` | `https://goproxy.cn,direct` | Go 依赖下载代理，可按部署网络覆盖 |
 | `JAVA_IMAGE` | `eclipse-temurin:17-jdk-jammy` | Java 运行时和 sidecar 编译基础镜像，可替换为内网镜像 |
 | `ROCKETMQ_DOWNLOAD_BASE` | `https://mirrors.huaweicloud.com/apache/rocketmq` | RocketMQ 发布包下载源 |
 | `ROCKETMQ_CHECKSUM_BASE` | `https://downloads.apache.org/rocketmq` | RocketMQ `.sha512` 校验文件下载源，设为空可跳过 |

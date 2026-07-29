@@ -5,6 +5,7 @@ services:
       dockerfile: Dockerfile
       args:
         GO_VERSION: ${GO_VERSION:-1.25}
+        GOPROXY: ${GOPROXY:-https://goproxy.cn,direct}
         ROCKETMQ_VERSION: ${RMQD_ROCKETMQ_VERSION:-5.3.2}
         ROCKETMQ_DOWNLOAD_BASE: ${ROCKETMQ_DOWNLOAD_BASE:-https://mirrors.huaweicloud.com/apache/rocketmq}
         ROCKETMQ_CHECKSUM_BASE: ${ROCKETMQ_CHECKSUM_BASE:-https://downloads.apache.org/rocketmq}
