@@ -659,6 +659,37 @@ function renderSnapshotFailure(statusSelector, error) {
   }
 }
 
+// snapshotErrorEntries 按错误文本聚合受影响快照，避免同一 Broker 异常在总览重复刷屏。
+function snapshotErrorEntries(sections, payloads) {
+  const grouped = new Map();
+  payloads.forEach((payload, index) => {
+    const reason = String(payload?.lastError || "").trim();
+    if (!reason) {
+      return;
+    }
+    const label = sections[index]?.label || `快照 ${index + 1}`;
+    const labels = grouped.get(reason) || [];
+    labels.push(label);
+    grouped.set(reason, labels);
+  });
+  return Array.from(grouped, ([reason, labels]) => ({ reason, labels }));
+}
+
+// renderSnapshotErrors 在总览直接展示完整错误原因和受影响区域。
+function renderSnapshotErrors(sections, payloads) {
+  const panel = $("#snapshotErrors");
+  const entries = snapshotErrorEntries(sections, payloads);
+  const failedSectionCount = entries.reduce((total, entry) => total + entry.labels.length, 0);
+  panel.hidden = entries.length === 0;
+  $("#snapshotErrorCount").textContent = `${failedSectionCount} 项失败`;
+  $("#snapshotErrorList").innerHTML = entries.map((entry) => `
+    <div class="snapshot-error-row">
+      <strong>${escapeHTML(entry.labels.join(" / "))}</strong>
+      <code>${escapeHTML(entry.reason)}</code>
+    </div>
+  `).join("");
+}
+
 // loadSnapshots 为每个首页区域独立收集请求结果，避免一个慢或失败接口中断整个控制台。
 async function loadSnapshots(options = {}) {
   const manageButton = options.manageButton !== false;
@@ -668,8 +699,10 @@ async function loadSnapshots(options = {}) {
     setLoading(button, true);
   }
   $("#snapshotState").textContent = "加载中";
+  renderSnapshotErrors([], []);
   const sections = [
     {
+      label: "集群",
       statusSelector: "#clusterStatus",
       load: () => fetchJSON("/api/clusters", { clusterId }),
       render: (payload) => {
@@ -678,11 +711,13 @@ async function loadSnapshots(options = {}) {
       }
     },
     {
+      label: "能力配置",
       statusSelector: "#featureStatus",
       load: () => fetchJSON("/api/features", { clusterId }),
       render: (payload) => renderFeatures(payload)
     },
     {
+      label: "Topic",
       statusSelector: "#topicStatus",
       load: () => fetchJSON("/api/topics", { clusterId }),
       render: (payload) => {
@@ -691,6 +726,7 @@ async function loadSnapshots(options = {}) {
       }
     },
     {
+      label: "Consumer",
       statusSelector: "#consumerStatus",
       load: () => fetchJSON("/api/consumers", { clusterId }),
       render: (payload) => {
@@ -699,6 +735,7 @@ async function loadSnapshots(options = {}) {
       }
     },
     {
+      label: "运行配置",
       statusSelector: "#runtimeConfigStatus",
       load: () => fetchJSON("/api/runtime-config", { clusterId }),
       render: (payload) => renderRuntimeConfig(payload)
@@ -720,6 +757,7 @@ async function loadSnapshots(options = {}) {
     });
     const [clusterPayload, featurePayload, topicPayload, consumerPayload] = payloads;
     renderOverview(clusterPayload, featurePayload, topicPayload, consumerPayload);
+    renderSnapshotErrors(sections, payloads);
     scheduleSnapshotPoll(clusterId, clusterPayload, featurePayload, topicPayload, consumerPayload);
   } finally {
     if (manageButton) {

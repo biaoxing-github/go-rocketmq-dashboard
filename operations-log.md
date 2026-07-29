@@ -26,3 +26,12 @@
 - 配置文档：新增 RMQD_CLUSTER_REGISTRY_PATH，Compose 与镜像默认保存到 /app/runtime/clusters.json，并修正多集群使用说明。
 - 用户边界：按明确要求不运行测试、构建、语法检查、Compose 检查或浏览器验证；完成后直接提交推送，验证由用户执行。
 - 发布构建排障：默认 proxy.golang.org 下载多个模块时返回 unexpected EOF；使用同一 Harbor Go 基础镜像确认 goproxy.cn 可下载后，为 Dockerfile 和 Compose 增加可覆盖 GOPROXY 构建参数。
+
+## 2026-07-29T11:06:03+08:00 快照错误原因展示修复（执行者：Devil）
+
+- 前馈读取：项目 AGENTS、Obsidian 项目索引、历史 process/feature 记录和 RocketMQ Dashboard 发布摘要。
+- 根因取证：`172.168.1.160:9876` NameServer 可达，但 `clusterList` 返回 Broker 连接异常；Broker 地址为 `rmqbroker-a-master:10911` 与 `rmqbroker-b-slave:10921`，Dashboard 原先把异常行误报为“行字段不足”，总览只显示“有错误”。
+- 范围边界：按用户要求只修改 Dashboard，不改 160 的 NameServer、Broker 或容器配置。
+- TDD：解析器和页面展示契约测试在实现前均按预期失败；实现后 focused tests 转绿。
+- 实现：解析器聚合全部 `RemotingConnectException`，总览按错误文本聚合受影响快照并展示完整 `lastError`。
+- 本地验证：全量 Go 测试、两个 Go 命令构建、JavaScript 语法、Compose 配置和 diff 检查全部通过。

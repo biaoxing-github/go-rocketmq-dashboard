@@ -125,6 +125,13 @@
             <strong id="snapshotState">-</strong>
             <small id="snapshotMeta">三个只读快照并行刷新</small>
           </article>
+          <article id="snapshotErrors" class="snapshot-errors" aria-live="polite" hidden>
+            <div class="snapshot-errors-head">
+              <strong>快照错误原因</strong>
+              <span id="snapshotErrorCount">0 项失败</span>
+            </div>
+            <div id="snapshotErrorList" class="snapshot-error-list"></div>
+          </article>
         </section>
 
         <section class="panel page-view" id="clusters" data-page="clusters" hidden>

@@ -1358,6 +1358,66 @@ td {
   background: color-mix(in oklch, var(--warn) 12%, white);
 }
 
+.snapshot-errors {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 12px;
+  padding: 14px 16px;
+  border-left: 3px solid var(--danger);
+  background: var(--accent-soft);
+}
+
+.snapshot-errors[hidden] {
+  display: none !important;
+}
+
+.snapshot-errors-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.snapshot-errors-head strong {
+  margin: 0;
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.snapshot-errors-head span {
+  color: var(--danger);
+  font-size: 12px;
+}
+
+.snapshot-error-list {
+  display: grid;
+  gap: 10px;
+}
+
+.snapshot-error-row {
+  display: grid;
+  grid-template-columns: minmax(96px, 140px) minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+
+.snapshot-error-row strong {
+  color: var(--danger);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.snapshot-error-row code {
+  min-width: 0;
+  color: var(--text);
+  font-family: Consolas, "Cascadia Code", monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 /* Proxy Reflection 返回的服务名和失败原因可能较长，必须在摘要网格内换行。 */
 .runtime-probe-services,
 .runtime-probe-error {

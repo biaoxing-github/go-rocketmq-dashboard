@@ -33,6 +33,31 @@ DefaultCluster          broker-a                0     127.0.0.1:10911     V5_2_0
 	}
 }
 
+// TestParseClusterListReportsBrokerConnectionFailures 保证异常输出展示全部不可达 Broker，而不是误报表格字段不足。
+func TestParseClusterListReportsBrokerConnectionFailures(t *testing.T) {
+	output := `#Cluster Name           #Broker Name            #BID  #Addr                  #Version              #InTPS(LOAD)                   #OutTPS(LOAD)  #Timer(Progress)        #PCWait(ms)  #Hour         #SPACE    #ACTIVATED
+org.apache.rocketmq.remoting.exception.RemotingConnectException: connect to rmqbroker-a-master:10911 failed
+	at org.apache.rocketmq.remoting.netty.NettyRemotingClient.invokeSync(NettyRemotingClient.java:584)
+DefaultCluster          broker-a                0     rmqbroker-a-master:10911                          0.00(,ms)                   0.00(,ms|,ms)  0-0(0.0w, 0.0, 0.0)                  0.00          0.0000         false
+org.apache.rocketmq.remoting.exception.RemotingConnectException: connect to rmqbroker-b-slave:10921 failed
+	at org.apache.rocketmq.remoting.netty.NettyRemotingClient.invokeSync(NettyRemotingClient.java:584)
+DefaultCluster          broker-a                1     rmqbroker-b-slave:10921                           0.00(,ms)                   0.00(,ms|,ms)  0-0(0.0w, 0.0, 0.0)                  0.00          0.0000         false`
+
+	_, err := ParseClusterList(output)
+	if err == nil {
+		t.Fatal("expected broker connection failure")
+	}
+	message := err.Error()
+	for _, expected := range []string{"Broker 连接失败", "rmqbroker-a-master:10911", "rmqbroker-b-slave:10921"} {
+		if !strings.Contains(message, expected) {
+			t.Fatalf("expected error to contain %q, got %q", expected, message)
+		}
+	}
+	if strings.Contains(message, "行字段不足") {
+		t.Fatalf("connection failure should not be reported as a parser shape error: %q", message)
+	}
+}
+
 func TestBuildMessageStatusChainOrdersLifecycleSteps(t *testing.T) {
 	message := MessageDetail{
 		MessageID:      "7F00000100002A9F00000000000123AB",

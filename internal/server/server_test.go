@@ -127,6 +127,29 @@ func TestPublicAppUsesFixedClusterRequestContextAndIndependentSnapshots(t *testi
 	}
 }
 
+// TestPublicOverviewDisplaysSnapshotErrorReasons 锁定总览直接展示每个失败快照的服务端 lastError。
+func TestPublicOverviewDisplaysSnapshotErrorReasons(t *testing.T) {
+	index, err := os.ReadFile("public/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{`id="snapshotErrors"`, `id="snapshotErrorCount"`, `id="snapshotErrorList"`} {
+		if !strings.Contains(string(index), expected) {
+			t.Fatalf("public/index.html should expose snapshot error detail %q", expected)
+		}
+	}
+
+	script, err := os.ReadFile("public/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{"function renderSnapshotErrors", "payload?.lastError", "snapshot-error-row"} {
+		if !strings.Contains(string(script), expected) {
+			t.Fatalf("public/app.js should render snapshot error reason %q", expected)
+		}
+	}
+}
+
 func TestPublicIndexDefinesFixedClusterAndMutationInputs(t *testing.T) {
 	index, err := os.ReadFile("public/index.html")
 	if err != nil {

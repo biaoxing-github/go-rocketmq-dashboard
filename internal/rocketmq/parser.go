@@ -32,6 +32,9 @@ func ParseClusterList(output string) ([]Cluster, error) {
 
 		fields := strings.Fields(line)
 		if len(fields) < 12 {
+			if summary := mqadminFailureSummary(output); summary != "" {
+				return nil, fmt.Errorf("clusterList 命令失败: %s", summary)
+			}
 			return nil, fmt.Errorf("clusterList 行字段不足: %s", line)
 		}
 
@@ -381,18 +384,33 @@ func ParseTopicStatus(topic string, output string) (TopicStatus, error) {
 	return status, nil
 }
 
-// mqadminFailureSummary 从 RocketMQ tools 的零退出异常输出里提取最关键的一行，避免前端只看到解析失败。
+// mqadminFailureSummary 从 RocketMQ tools 的零退出异常输出里提取连接失败或最关键异常，避免前端只看到解析失败。
 func mqadminFailureSummary(output string) string {
+	connectionFailures := make([]string, 0)
+	seenConnections := make(map[string]struct{})
+	otherFailure := ""
 	for _, raw := range strings.Split(output, "\n") {
 		line := strings.TrimSpace(raw)
 		if line == "" {
 			continue
 		}
-		if strings.Contains(line, "SubCommandException") || strings.Contains(line, "Caused by:") || strings.Contains(line, "RemotingTimeoutException") {
-			return line
+		if index := strings.Index(line, "RemotingConnectException:"); index >= 0 {
+			detail := strings.TrimSpace(line[index+len("RemotingConnectException:"):])
+			message := "Broker 连接失败: " + detail
+			if _, exists := seenConnections[message]; !exists {
+				seenConnections[message] = struct{}{}
+				connectionFailures = append(connectionFailures, message)
+			}
+			continue
+		}
+		if otherFailure == "" && (strings.Contains(line, "SubCommandException") || strings.Contains(line, "Caused by:") || strings.Contains(line, "RemotingTimeoutException")) {
+			otherFailure = line
 		}
 	}
-	return ""
+	if len(connectionFailures) > 0 {
+		return strings.Join(connectionFailures, "；")
+	}
+	return otherFailure
 }
 
 // normalizeTopicRouteJSON 兼容 RocketMQ 5.2.0 topicRoute 输出中 brokerAddrs 的数字 key 未加引号格式。
