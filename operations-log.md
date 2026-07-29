@@ -35,3 +35,12 @@
 - TDD：解析器和页面展示契约测试在实现前均按预期失败；实现后 focused tests 转绿。
 - 实现：解析器聚合全部 `RemotingConnectException`，总览按错误文本聚合受影响快照并展示完整 `lastError`。
 - 本地验证：全量 Go 测试、两个 Go 命令构建、JavaScript 语法、Compose 配置和 diff 检查全部通过。
+
+## 2026-07-29T11:15:00+08:00 快照错误原因展示生产发布（执行者：Devil）
+
+- Git：提交 `09b19c9` 已推送到 `origin/codex/goadmin-rocksdb-local`。
+- 镜像：从 `git archive HEAD` 构建并推送 `20260729-1108-snapshot-errors-09b19c95`，digest 为 `sha256:97b0077cc00ae2e259914fa3d5e1a25edba49c64503d240bf7411faa9f2a3d43`。
+- 93 部署：使用服务器实际的 `docker-compose` 工具，备份为 `docker-compose.yml.bak.20260729111225.snapshot-errors`；仅替换 Dashboard 镜像引用，容器 running/healthy、restart=0、北京时间正确。
+- 线上 API：选择 `test-160` 后，`/api/clusters` 和 `/api/features` 的 `lastError` 均显示两个 Broker 连接失败；`/api/topics` 返回 15 条、`/api/consumers` 返回 1 条。
+- 浏览器：生产桌面与 390x844 移动端均显示“快照错误原因 / 2 项失败”及完整 Broker 地址；移动端 `scrollWidth=clientWidth=375`，控制台 0 error/0 warning。
+- 边界：未修改 `172.168.1.160` 的 NameServer、Broker 或任何 RocketMQ 数据；页面现已把底层配置问题明确展示出来。
