@@ -90,3 +90,11 @@
 - 实现：增加集群级 Broker 地址映射持久化、校验、页面编辑、完整 Provider 工厂传参和独立 mqadmin JVM hosts 注入；映射集群禁用共享 sidecar/native 路径。
 - 验证：TDD 红灯、focused tests、全量 Go 测试、双命令构建、JS 语法、Compose、diff 检查及桌面/移动浏览器检查通过。
 - 边界：未提交、未推送、未部署，未删除 160 上已有的 `test` Topic，也未执行新的 RocketMQ 写操作。
+
+## 2026-08-11T15:08:38+08:00 Broker 映射代码推送与 93 镜像清理（执行者：Devil）
+
+- 发布门禁：全量 Go 测试、`rmqdash`/`goadmin` 构建、JavaScript 语法、Compose 配置和 diff 检查全部通过。
+- Git：提交 `a1a725e`（`fix(dashboard): isolate broker hostname mappings`）已推送到 `origin/main`。
+- 清理前审计：93 共 80 个镜像，Dashboard 仓库镜像 20 个；当前容器使用镜像 ID `sha256:c2a511c65fb54761ca20bb053234fbe659139fc0ae13dcb75c1e5d98a924337f`。
+- 镜像清理：删除未被容器引用的旧 Dashboard `latest` 和 dangling 镜像；镜像对象降至 45 个，Dashboard 仓库仅保留当前运行的 1 个，Docker 报告回收 1.41GB。
+- 运行验证：清理后 Dashboard 镜像 ID 未变化，容器 `running/healthy`、restart=0；未清理任何容器、卷或当前服务镜像。
