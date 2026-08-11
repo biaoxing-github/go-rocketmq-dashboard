@@ -117,6 +117,35 @@ func TestMQAdminJavaArgsForcesUTF8ConsoleEncoding(t *testing.T) {
 	}
 }
 
+// TestMQAdminJavaArgsUsesClusterHostsFile 验证映射集群的 JVM 命令只读取该集群专属 hosts 文件。
+func TestMQAdminJavaArgsUsesClusterHostsFile(t *testing.T) {
+	args := mqadminJavaArgsWithHostsFile("rocketmq-tools.jar", "C:/tmp/test-49.hosts", []string{"topicStatus", "-t", "test"})
+	expected := "-Djdk.net.hosts.file=C:/tmp/test-49.hosts"
+	if len(args) < 4 || args[3] != expected {
+		t.Fatalf("expected cluster hosts property %q, got %#v", expected, args)
+	}
+}
+
+// TestWriteHostAliasesFileWritesStableMappings 验证同名 Broker 映射按稳定顺序写入独立临时文件。
+func TestWriteHostAliasesFileWritesStableMappings(t *testing.T) {
+	path, cleanup, err := writeHostAliasesFile(map[string]string{
+		"rmqbroker-b-slave":  "172.168.1.49",
+		"rmqbroker-a-master": "172.168.1.49",
+	})
+	if err != nil {
+		t.Fatalf("write host aliases: %v", err)
+	}
+	defer cleanup()
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read host aliases: %v", err)
+	}
+	expected := "172.168.1.49 rmqbroker-a-master\n172.168.1.49 rmqbroker-b-slave\n"
+	if string(content) != expected {
+		t.Fatalf("unexpected host aliases\nexpected=%q\nactual=%q", expected, string(content))
+	}
+}
+
 func TestTraceMissingDetailHidesMQAdminSubCommandException(t *testing.T) {
 	err := &commandErrorForTest{message: "mqadmin 命令输出异常: org.apache.rocketmq.tools.command.SubCommandException: QueryMsgTraceByIdSubCommandcommand failed"}
 

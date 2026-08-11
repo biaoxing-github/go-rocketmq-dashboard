@@ -34,10 +34,14 @@ func main() {
 	if stopSidecar != nil {
 		defer stopSidecar()
 	}
-	providerFactory := func(nameServer string) rocketmq.Provider {
-		return mqAdminProviderForMode(cfg, nameServer)
+	primaryDefinition := server.ClusterDefinition{ID: "default", NameServer: primaryNameServer}
+	if len(clusters) > 0 {
+		primaryDefinition = clusters[0]
 	}
-	provider := providerFactory(primaryNameServer)
+	providerFactory := func(definition server.ClusterDefinition) rocketmq.Provider {
+		return mqAdminProviderForCluster(cfg, definition)
+	}
+	provider := providerFactory(primaryDefinition)
 
 	if *checkCluster {
 		clusters, err := provider.ClusterList(context.Background())
@@ -89,18 +93,18 @@ func main() {
 	}
 
 	app := server.New(server.AppConfig{
-		ProviderFactory:      providerFactory,
-		Clusters:             clusters,
-		ClusterCacheTTL:      cfg.ClusterCacheTTL,
-		MessageChainCacheTTL: cfg.MessageChainCacheTTL,
-		LatencyBudget:        cfg.CommandMaxLatency,
-		NameServer:           cfg.NameServer,
-		NameServerOptions:    cfg.NameServerOptions,
-		RuntimeConfigEnabled: cfg.RuntimeConfigEnabled,
-		ProxyRuntimes:        proxyRuntimes,
-		Authenticator:        authenticator,
-		AuditLogPath:         cfg.AuditLogPath,
-		ClusterRegistryPath:  cfg.ClusterRegistryPath,
+		ClusterProviderFactory: providerFactory,
+		Clusters:               clusters,
+		ClusterCacheTTL:        cfg.ClusterCacheTTL,
+		MessageChainCacheTTL:   cfg.MessageChainCacheTTL,
+		LatencyBudget:          cfg.CommandMaxLatency,
+		NameServer:             cfg.NameServer,
+		NameServerOptions:      cfg.NameServerOptions,
+		RuntimeConfigEnabled:   cfg.RuntimeConfigEnabled,
+		ProxyRuntimes:          proxyRuntimes,
+		Authenticator:          authenticator,
+		AuditLogPath:           cfg.AuditLogPath,
+		ClusterRegistryPath:    cfg.ClusterRegistryPath,
 	})
 
 	log.Printf("RocketMQ Go Dashboard listening on %s, configuredClusters=%d", cfg.Addr, len(clusters))
@@ -114,12 +118,22 @@ func dashboardClusters(cfg config.Config) []server.ClusterDefinition {
 	clusters := make([]server.ClusterDefinition, 0, len(cfg.Clusters))
 	for _, cluster := range cfg.Clusters {
 		clusters = append(clusters, server.ClusterDefinition{
-			ID:         cluster.ID,
-			Label:      cluster.Label,
-			NameServer: cluster.NameServer,
+			ID:                    cluster.ID,
+			Label:                 cluster.Label,
+			NameServer:            cluster.NameServer,
+			BrokerAddressMappings: dashboardBrokerAddressMappings(cluster.BrokerAddressMappings),
 		})
 	}
 	return clusters
+}
+
+// dashboardBrokerAddressMappings 将部署 JSON 中的映射复制到 HTTP 层集群定义。
+func dashboardBrokerAddressMappings(mappings []config.BrokerAddressMapping) []server.BrokerAddressMapping {
+	result := make([]server.BrokerAddressMapping, 0, len(mappings))
+	for _, mapping := range mappings {
+		result = append(result, server.BrokerAddressMapping{Host: mapping.Host, IP: mapping.IP})
+	}
+	return result
 }
 
 // resolveProxyRuntimeBinding 将单个容器内 Proxy 显式绑定到一个集群，避免多集群控制面共享进程。
@@ -146,6 +160,12 @@ func resolveProxyRuntimeBinding(cfg config.Config, clusters []server.ClusterDefi
 }
 
 func mqAdminProviderForMode(cfg config.Config, nameServer string) *rocketmq.MQAdminProvider {
+	return mqAdminProviderForCluster(cfg, server.ClusterDefinition{NameServer: nameServer})
+}
+
+// mqAdminProviderForCluster 为一个固定集群创建 Provider；配置地址映射时强制使用独立 JVM 进程。
+func mqAdminProviderForCluster(cfg config.Config, definition server.ClusterDefinition) *rocketmq.MQAdminProvider {
+	nameServer := definition.NameServer
 	provider := &rocketmq.MQAdminProvider{
 		NameServer:       nameServer,
 		JavaPath:         cfg.JavaPath,
@@ -162,6 +182,16 @@ func mqAdminProviderForMode(cfg config.Config, nameServer string) *rocketmq.MQAd
 		MessageCacheTTL:  cfg.MessageChainCacheTTL,
 	}
 	provider.NativeMessageByOffset = nativeTopicMessageByOffsetReader(nameServer, goAdminShadowTimeout(cfg), goadminshadow.RunCommand)
+	if len(definition.BrokerAddressMappings) > 0 {
+		provider.HostAliases = make(map[string]string, len(definition.BrokerAddressMappings))
+		for _, mapping := range definition.BrokerAddressMappings {
+			provider.HostAliases[mapping.Host] = mapping.IP
+		}
+		provider.SidecarEnabled = false
+		provider.CommandRunner = nil
+		provider.NativeMessageByOffset = nil
+		return provider
+	}
 	switch strings.ToLower(strings.TrimSpace(cfg.AdminProvider)) {
 	case "sidecar":
 		provider.SidecarEnabled = true

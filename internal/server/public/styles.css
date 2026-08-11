@@ -407,7 +407,7 @@ a {
   text-align: center;
 }
 
-.nameserver-field-grid .nameserver-field:last-child {
+.nameserver-field-wide {
   grid-column: 1 / -1;
 }
 
@@ -418,7 +418,8 @@ a {
   font-size: 12px;
 }
 
-.nameserver-field input {
+.nameserver-field input,
+.nameserver-field textarea {
   width: 100%;
   min-height: 40px;
   padding: 9px 11px;
@@ -428,6 +429,11 @@ a {
   background: var(--surface);
   font-family: Consolas, "Cascadia Code", monospace;
   font-size: 13px;
+}
+
+.nameserver-field textarea {
+  min-height: 88px;
+  resize: vertical;
 }
 
 .nameserver-choice-head {

@@ -25,6 +25,8 @@ var staticFiles embed.FS
 type AppConfig struct {
 	Provider        rocketmq.Provider
 	ProviderFactory func(nameServer string) rocketmq.Provider
+	// ClusterProviderFactory 按完整集群定义创建 Provider，供集群级地址映射等隔离配置使用。
+	ClusterProviderFactory func(definition ClusterDefinition) rocketmq.Provider
 	// Clusters 是启动时固定加载的多集群定义；每个请求通过 clusterId 选择其中之一。
 	Clusters             []ClusterDefinition
 	ClusterCacheTTL      time.Duration
@@ -54,7 +56,7 @@ type AppConfig struct {
 type App struct {
 	mux             *http.ServeMux
 	clusterMu       sync.RWMutex
-	providerFactory func(nameServer string) rocketmq.Provider
+	providerFactory func(definition ClusterDefinition) rocketmq.Provider
 	clusters        map[string]*clusterRuntime
 	clusterOrder    []string
 	// clusterCacheTTL 是动态注册运行时使用的核心快照缓存时间。
@@ -123,10 +125,16 @@ func New(config AppConfig) *App {
 	if budget <= 0 {
 		budget = time.Second
 	}
-	providerFactory := config.ProviderFactory
+	providerFactory := config.ClusterProviderFactory
+	if providerFactory == nil && config.ProviderFactory != nil {
+		legacyFactory := config.ProviderFactory
+		providerFactory = func(definition ClusterDefinition) rocketmq.Provider {
+			return legacyFactory(definition.NameServer)
+		}
+	}
 	if providerFactory == nil {
 		configuredProvider := config.Provider
-		providerFactory = func(nameServer string) rocketmq.Provider {
+		providerFactory = func(ClusterDefinition) rocketmq.Provider {
 			if configuredProvider != nil {
 				return configuredProvider
 			}
@@ -161,7 +169,7 @@ func New(config AppConfig) *App {
 		auditStore:           auditStore,
 	}
 	for _, definition := range definitions {
-		runtime := newClusterRuntime(definition, providerFactory(definition.NameServer), ttl, chainTTL)
+		runtime := newClusterRuntime(definition, providerFactory(definition), ttl, chainTTL)
 		runtime.proxyRuntime = config.ProxyRuntimes[definition.ID]
 		if runtime.proxyRuntime == nil && len(definitions) == 1 {
 			runtime.proxyRuntime = config.ProxyRuntime

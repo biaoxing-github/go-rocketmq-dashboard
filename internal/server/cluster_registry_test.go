@@ -68,7 +68,7 @@ func TestClusterRegistryUpdateDeletePersistsAndRebuildsRuntime(t *testing.T) {
 	update := authorizedMutationRequest(
 		http.MethodPut,
 		"/api/config/clusters/managed-a",
-		bytes.NewBufferString(`{"id":"managed-b","label":"页面集群 B","nameServer":"managed-b-ns:9876"}`),
+		bytes.NewBufferString(`{"id":"managed-b","label":"页面集群 B","nameServer":"managed-b-ns:9876","brokerAddressMappings":[{"host":"managed-b-ns","ip":"10.0.0.2"},{"host":"rmqbroker-a-master","ip":"10.0.0.2"}]}`),
 	)
 	updateRecorder := httptest.NewRecorder()
 	app.ServeHTTP(updateRecorder, update)
@@ -79,7 +79,7 @@ func TestClusterRegistryUpdateDeletePersistsAndRebuildsRuntime(t *testing.T) {
 		t.Fatal("expected update operation identifier")
 	}
 	updatedConfig := decodeClusterConfigResponse(t, updateRecorder)
-	if len(updatedConfig.Clusters) != 2 || updatedConfig.Clusters[1].ID != "managed-b" || updatedConfig.Clusters[1].NameServer != "managed-b-ns:9876" {
+	if len(updatedConfig.Clusters) != 2 || updatedConfig.Clusters[1].ID != "managed-b" || updatedConfig.Clusters[1].NameServer != "managed-b-ns:9876" || len(updatedConfig.Clusters[1].BrokerAddressMappings) != 2 {
 		t.Fatalf("unexpected updated clusters %#v", updatedConfig.Clusters)
 	}
 	if len(updatedConfig.ManagedClusterIDs) != 1 || updatedConfig.ManagedClusterIDs[0] != "managed-b" {
@@ -93,7 +93,7 @@ func TestClusterRegistryUpdateDeletePersistsAndRebuildsRuntime(t *testing.T) {
 		t.Fatalf("runtime replacement failed oldExists=%t new=%#v", oldRuntimeExists, newRuntime)
 	}
 	persistedAfterUpdate := loadClusterDefinitions(registryPath)
-	if len(persistedAfterUpdate) != 1 || persistedAfterUpdate[0].ID != "managed-b" || persistedAfterUpdate[0].Label != "页面集群 B" {
+	if len(persistedAfterUpdate) != 1 || persistedAfterUpdate[0].ID != "managed-b" || persistedAfterUpdate[0].Label != "页面集群 B" || len(persistedAfterUpdate[0].BrokerAddressMappings) != 2 {
 		t.Fatalf("unexpected persisted update %#v", persistedAfterUpdate)
 	}
 
@@ -166,13 +166,50 @@ func TestClusterRegistryRejectsImmutableCollisionAndMissingTargets(t *testing.T)
 	}
 }
 
+// TestNormalizeBrokerAddressMappingsRejectsAmbiguousDefinitions 验证重复主机、非法 IP 和缺失 NameServer 映射会立即失败。
+func TestNormalizeBrokerAddressMappingsRejectsAmbiguousDefinitions(t *testing.T) {
+	tests := []struct {
+		name       string
+		nameServer string
+		mappings   []BrokerAddressMapping
+		wantText   string
+	}{
+		{
+			name:       "duplicate host",
+			nameServer: "172.168.1.49:9876",
+			mappings:   []BrokerAddressMapping{{Host: "broker-a", IP: "172.168.1.49"}, {Host: "BROKER-A", IP: "172.168.1.50"}},
+			wantText:   "不能重复",
+		},
+		{
+			name:       "invalid ip",
+			nameServer: "172.168.1.49:9876",
+			mappings:   []BrokerAddressMapping{{Host: "broker-a", IP: "not-an-ip"}},
+			wantText:   "IP 无效",
+		},
+		{
+			name:       "missing nameserver host",
+			nameServer: "rocket-server:9876",
+			mappings:   []BrokerAddressMapping{{Host: "broker-a", IP: "172.168.1.49"}},
+			wantText:   "NameServer 主机名也必须配置映射",
+		},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			_, err := normalizeBrokerAddressMappings(testCase.nameServer, testCase.mappings)
+			if err == nil || !strings.Contains(err.Error(), testCase.wantText) {
+				t.Fatalf("expected error containing %q, got %v", testCase.wantText, err)
+			}
+		})
+	}
+}
+
 // TestPublicClusterManagementExposesEditDeleteContract 锁定页面修改、删除和只读启动集群的交互契约。
 func TestPublicClusterManagementExposesEditDeleteContract(t *testing.T) {
 	index, err := os.ReadFile("public/index.html")
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, expected := range []string{`id="clusterManagementList"`, `id="clusterManagementCount"`, `id="clusterAddDialogTitle"`} {
+	for _, expected := range []string{`id="clusterManagementList"`, `id="clusterManagementCount"`, `id="clusterAddDialogTitle"`, `id="clusterAddBrokerMappings"`} {
 		if !strings.Contains(string(index), expected) {
 			t.Fatalf("public/index.html should expose cluster management control %q", expected)
 		}
@@ -192,6 +229,8 @@ func TestPublicClusterManagementExposesEditDeleteContract(t *testing.T) {
 		"启动配置集群不可在页面修改",
 		"state.selectedClusterId = definition.id",
 		`state.selectedClusterId = ""`,
+		"brokerAddressMappings",
+		"parseBrokerAddressMappings",
 	} {
 		if !strings.Contains(source, expected) {
 			t.Fatalf("public/app.js should keep cluster management contract %q", expected)

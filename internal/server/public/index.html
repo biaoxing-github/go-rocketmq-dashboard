@@ -991,9 +991,13 @@
             <span>显示名称</span>
             <input id="clusterAddLabel" name="label" maxlength="80" autocomplete="off" placeholder="生产集群" />
           </label>
-          <label class="nameserver-field" for="clusterAddNameServer">
+          <label class="nameserver-field nameserver-field-wide" for="clusterAddNameServer">
             <span>NameServer</span>
             <input id="clusterAddNameServer" name="nameServer" autocomplete="off" spellcheck="false" placeholder="172.168.1.93:9876" required />
+          </label>
+          <label class="nameserver-field nameserver-field-wide" for="clusterAddBrokerMappings">
+            <span>Broker 地址映射</span>
+            <textarea id="clusterAddBrokerMappings" name="brokerAddressMappings" autocomplete="off" spellcheck="false" placeholder="rmqbroker-a-master=172.168.1.49"></textarea>
           </label>
         </div>
         <p id="clusterAddStatus" class="dialog-status" role="alert" aria-live="polite">等待填写</p>

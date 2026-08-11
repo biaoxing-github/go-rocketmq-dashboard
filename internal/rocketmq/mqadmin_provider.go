@@ -50,6 +50,8 @@ type MQAdminProvider struct {
 	Version         string
 	Timeout         time.Duration
 	CommandRunner   CommandRunner
+	// HostAliases 只在独立 mqadmin JVM 进程中生效，用于隔离不同集群的同名 Broker。
+	HostAliases map[string]string
 	// NativeMessageByOffset 只服务 Topic 历史消息浏览；其失败会回退到既有命令通道。
 	NativeMessageByOffset NativeMessageByOffsetReader
 	SidecarEnabled        bool
@@ -1461,7 +1463,13 @@ func (p *MQAdminProvider) runProcess(ctx context.Context, args ...string) (strin
 		javaPath = "java"
 	}
 
-	commandArgs := mqadminJavaArgs(cp, args)
+	hostsFile, cleanupHostsFile, err := writeHostAliasesFile(p.HostAliases)
+	if err != nil {
+		return "", fmt.Errorf("创建集群地址映射文件失败: %w", err)
+	}
+	defer cleanupHostsFile()
+
+	commandArgs := mqadminJavaArgsWithHostsFile(cp, hostsFile, args)
 	cmd := exec.CommandContext(cmdCtx, javaPath, commandArgs...)
 	output, err := cmd.CombinedOutput()
 	if cmdCtx.Err() != nil {
@@ -1580,15 +1588,54 @@ func normalizeSidecarBaseURL(raw string) (string, error) {
 
 // mqadminJavaArgs 统一生成 Java 启动参数，并强制 stdout/stderr 使用 UTF-8，避免 Windows 默认编码污染消息体中文。
 func mqadminJavaArgs(classpath string, args []string) []string {
+	return mqadminJavaArgsWithHostsFile(classpath, "", args)
+}
+
+// mqadminJavaArgsWithHostsFile 生成官方 mqadmin JVM 参数，并按需注入当前集群专属 hosts 文件。
+func mqadminJavaArgsWithHostsFile(classpath string, hostsFile string, args []string) []string {
 	commandArgs := []string{
 		"-Dfile.encoding=UTF-8",
 		"-Dsun.stdout.encoding=UTF-8",
 		"-Dsun.stderr.encoding=UTF-8",
+	}
+	if hostsFile = strings.TrimSpace(hostsFile); hostsFile != "" {
+		commandArgs = append(commandArgs, "-Djdk.net.hosts.file="+filepath.ToSlash(hostsFile))
+	}
+	commandArgs = append(commandArgs,
 		"-cp",
 		classpath,
 		"org.apache.rocketmq.tools.command.MQAdminStartup",
-	}
+	)
 	return append(commandArgs, args...)
+}
+
+// writeHostAliasesFile 为一次 mqadmin 命令写入稳定排序的集群专属主机名映射。
+func writeHostAliasesFile(aliases map[string]string) (string, func(), error) {
+	if len(aliases) == 0 {
+		return "", func() {}, nil
+	}
+	hosts := make([]string, 0, len(aliases))
+	for host := range aliases {
+		hosts = append(hosts, host)
+	}
+	sort.Strings(hosts)
+	file, err := os.CreateTemp("", "rmqdash-cluster-*.hosts")
+	if err != nil {
+		return "", func() {}, err
+	}
+	cleanup := func() { _ = os.Remove(file.Name()) }
+	for _, host := range hosts {
+		if _, err := fmt.Fprintf(file, "%s %s\n", aliases[host], host); err != nil {
+			_ = file.Close()
+			cleanup()
+			return "", func() {}, err
+		}
+	}
+	if err := file.Close(); err != nil {
+		cleanup()
+		return "", func() {}, err
+	}
+	return file.Name(), cleanup, nil
 }
 
 // mqadminCommandFailure 识别 RocketMQ tools 零退出但只输出异常栈的情况，避免后续解析器误判为数据格式问题。

@@ -101,13 +101,16 @@ func TestLoadReadsRuntimeConfigAndProxySettings(t *testing.T) {
 
 // TestLoadReadsFixedClustersAndAuditSettings 验证多集群和写操作审计配置由部署环境显式提供。
 func TestLoadReadsFixedClustersAndAuditSettings(t *testing.T) {
-	t.Setenv("RMQD_CLUSTERS_JSON", `[{"id":"prod-a","label":"生产 A","nameServer":"10.0.0.1:9876"},{"id":"prod-b","label":"生产 B","nameServer":"10.0.0.2:9876"}]`)
+	t.Setenv("RMQD_CLUSTERS_JSON", `[{"id":"prod-a","label":"生产 A","nameServer":"10.0.0.1:9876"},{"id":"prod-b","label":"生产 B","nameServer":"10.0.0.2:9876","brokerAddressMappings":[{"host":"rmqbroker-a-master","ip":"10.0.0.2"}]}]`)
 	t.Setenv("RMQD_AUTH_CREDENTIALS_FILE", "/run/secrets/dashboard-auth.json")
 	t.Setenv("RMQD_AUDIT_LOG_PATH", "/var/lib/rmqdash/audit.jsonl")
 
 	cfg := Load()
 	if len(cfg.Clusters) != 2 || cfg.Clusters[0].ID != "prod-a" || cfg.Clusters[1].NameServer != "10.0.0.2:9876" {
 		t.Fatalf("unexpected fixed clusters %#v", cfg.Clusters)
+	}
+	if len(cfg.Clusters[1].BrokerAddressMappings) != 1 || cfg.Clusters[1].BrokerAddressMappings[0].IP != "10.0.0.2" {
+		t.Fatalf("unexpected broker address mappings %#v", cfg.Clusters[1].BrokerAddressMappings)
 	}
 	if cfg.AuthCredentialsFile != "/run/secrets/dashboard-auth.json" || cfg.AuditLogPath != "/var/lib/rmqdash/audit.jsonl" {
 		t.Fatalf("unexpected write-operation paths credentials=%q audit=%q", cfg.AuthCredentialsFile, cfg.AuditLogPath)

@@ -19,6 +19,16 @@ type ClusterDefinition struct {
 	Label string `json:"label"`
 	// NameServer 是该集群的 NameServer 地址。
 	NameServer string `json:"nameServer"`
+	// BrokerAddressMappings 为当前集群覆盖 Broker 主机名解析，避免同名 Broker 跨集群串线。
+	BrokerAddressMappings []BrokerAddressMapping `json:"brokerAddressMappings,omitempty"`
+}
+
+// BrokerAddressMapping 描述一个集群内 Broker 主机名到 IP 地址的固定映射。
+type BrokerAddressMapping struct {
+	// Host 是 NameServer 路由返回的 Broker 主机名。
+	Host string `json:"host"`
+	// IP 是该主机名在当前集群内应连接的 IP 地址。
+	IP string `json:"ip"`
 }
 
 // Config 保存 Dashboard 运行参数，所有字段均可通过环境变量覆盖，便于本机和服务器直接运行。

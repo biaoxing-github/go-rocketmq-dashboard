@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"rocketmq-go-dashboard/internal/config"
+	"rocketmq-go-dashboard/internal/rocketmq"
 	"rocketmq-go-dashboard/internal/server"
 )
 
@@ -127,4 +128,27 @@ func TestMQAdminProviderForModeAttachesNativeTopicMessageReader(t *testing.T) {
 	if provider.NativeMessageByOffset == nil {
 		t.Fatal("expected Dashboard provider to attach native topic message reader")
 	}
+}
+
+// TestMappedClusterUsesIsolatedProcessProvider 验证地址映射集群不会经过共享 sidecar 或 Go native DNS。
+func TestMappedClusterUsesIsolatedProcessProvider(t *testing.T) {
+	provider := mqAdminProviderForCluster(config.Config{
+		RequestTimeout:      time.Second,
+		AdminProvider:       "auto",
+		AdminSidecarEnabled: true,
+	}, server.ClusterDefinition{
+		ID:         "test-49",
+		NameServer: "172.168.1.49:9876",
+		BrokerAddressMappings: []server.BrokerAddressMapping{{
+			Host: "rmqbroker-a-master",
+			IP:   "172.168.1.49",
+		}},
+	})
+	if provider.SidecarEnabled || provider.CommandRunner != nil || provider.NativeMessageByOffset != nil {
+		t.Fatalf("mapped cluster must use isolated process provider: %#v", provider)
+	}
+	if !reflect.DeepEqual(provider.HostAliases, map[string]string{"rmqbroker-a-master": "172.168.1.49"}) {
+		t.Fatalf("unexpected provider host aliases %#v", provider.HostAliases)
+	}
+	var _ rocketmq.Provider = provider
 }

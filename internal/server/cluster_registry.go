@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -23,6 +24,8 @@ var (
 	errClusterNotFound = errors.New("集群不存在")
 	// errClusterImmutable 表示启动环境变量定义的集群不能由页面覆盖。
 	errClusterImmutable = errors.New("启动配置集群不可在页面修改或删除")
+	// brokerHostPattern 约束可写入 JVM hosts 文件的 Broker 主机名。
+	brokerHostPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9.-]{0,252}$`)
 )
 
 // loadClusterDefinitions 读取页面动态添加的集群定义；显式文件损坏时立即终止启动。
@@ -74,7 +77,65 @@ func normalizeManagedClusterDefinition(definition ClusterDefinition) (ClusterDef
 	if definition.Label == "" {
 		definition.Label = definition.ID
 	}
+	mappings, err := normalizeBrokerAddressMappings(definition.NameServer, definition.BrokerAddressMappings)
+	if err != nil {
+		return ClusterDefinition{}, err
+	}
+	definition.BrokerAddressMappings = mappings
 	return definition, nil
+}
+
+// normalizeBrokerAddressMappings 校验、规范化并稳定排序当前集群的 Broker 主机名映射。
+func normalizeBrokerAddressMappings(nameServer string, mappings []BrokerAddressMapping) ([]BrokerAddressMapping, error) {
+	if len(mappings) == 0 {
+		return nil, nil
+	}
+	seen := make(map[string]struct{}, len(mappings))
+	normalized := make([]BrokerAddressMapping, 0, len(mappings))
+	for _, mapping := range mappings {
+		host := strings.ToLower(strings.TrimSpace(mapping.Host))
+		ip := net.ParseIP(strings.TrimSpace(mapping.IP))
+		if !brokerHostPattern.MatchString(host) || net.ParseIP(host) != nil {
+			return nil, fmt.Errorf("Broker 映射主机名无效: %s", mapping.Host)
+		}
+		if ip == nil {
+			return nil, fmt.Errorf("Broker 映射 IP 无效: %s", mapping.IP)
+		}
+		if _, exists := seen[host]; exists {
+			return nil, fmt.Errorf("Broker 映射主机名不能重复: %s", host)
+		}
+		seen[host] = struct{}{}
+		normalized = append(normalized, BrokerAddressMapping{Host: host, IP: ip.String()})
+	}
+	for _, endpoint := range strings.Split(nameServer, ";") {
+		host := nameServerHost(endpoint)
+		if host != "" && net.ParseIP(host) == nil {
+			if _, exists := seen[strings.ToLower(host)]; !exists {
+				return nil, fmt.Errorf("启用 Broker 地址映射时，NameServer 主机名也必须配置映射: %s", host)
+			}
+		}
+	}
+	sort.SliceStable(normalized, func(left, right int) bool {
+		return normalized[left].Host < normalized[right].Host
+	})
+	return normalized, nil
+}
+
+// nameServerHost 提取单个 NameServer 端点的主机部分，用于校验自定义 hosts 文件是否完整。
+func nameServerHost(endpoint string) string {
+	endpoint = strings.TrimSpace(endpoint)
+	if endpoint == "" {
+		return ""
+	}
+	host, _, err := net.SplitHostPort(endpoint)
+	if err == nil {
+		return strings.Trim(host, "[]")
+	}
+	index := strings.LastIndex(endpoint, ":")
+	if index <= 0 {
+		return strings.Trim(endpoint, "[]")
+	}
+	return strings.Trim(endpoint[:index], "[]")
 }
 
 // normalizeManagedClusterDefinitions 校验持久化列表并拒绝重复 clusterId。
@@ -152,7 +213,7 @@ func (a *App) registerCluster(definition ClusterDefinition) (*clusterRuntime, er
 	if err := saveClusterDefinitions(a.clusterRegistryPath, nextPersisted); err != nil {
 		return nil, err
 	}
-	runtime := newClusterRuntime(definition, a.providerFactory(definition.NameServer), a.clusterCacheTTL, a.messageChainCacheTTL)
+	runtime := newClusterRuntime(definition, a.providerFactory(definition), a.clusterCacheTTL, a.messageChainCacheTTL)
 	a.persistedClusters = nextPersisted
 	a.clusters[definition.ID] = runtime
 	a.clusterOrder = append(a.clusterOrder, definition.ID)
@@ -207,7 +268,7 @@ func (a *App) updateCluster(previousID string, definition ClusterDefinition) (*c
 	if err := saveClusterDefinitions(a.clusterRegistryPath, nextPersisted); err != nil {
 		return nil, err
 	}
-	runtime := newClusterRuntime(definition, a.providerFactory(definition.NameServer), a.clusterCacheTTL, a.messageChainCacheTTL)
+	runtime := newClusterRuntime(definition, a.providerFactory(definition), a.clusterCacheTTL, a.messageChainCacheTTL)
 	delete(a.clusters, previousID)
 	a.clusters[definition.ID] = runtime
 	for index, clusterID := range a.clusterOrder {

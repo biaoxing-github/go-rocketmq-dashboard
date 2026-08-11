@@ -54,3 +54,39 @@
 - 线上 API：选择 `test-160` 后，`/api/clusters` 和 `/api/features` 的 `lastError` 均显示两个 Broker 连接失败；`/api/topics` 返回 15 条、`/api/consumers` 返回 1 条。
 - 浏览器：生产桌面与 390x844 移动端均显示“快照错误原因 / 2 项失败”及完整 Broker 地址；移动端 `scrollWidth=clientWidth=375`，控制台 0 error/0 warning。
 - 边界：未修改 `172.168.1.160` 的 NameServer、Broker 或任何 RocketMQ 数据；页面现已把底层配置问题明确展示出来。
+
+## 2026-07-29T11:33:27+08:00 test-160 Broker 主机名连接修复（执行者：Devil）
+
+- 根因复核：93 Dashboard 容器无法解析 `rmqbroker-a-master` 和 `rmqbroker-b-slave`，但直连 `172.168.1.160:10911`、`:10921` 均开放。
+- 范围边界：仅修改 93 Dashboard 容器 Compose 的 `extra_hosts`，未修改 160 的 NameServer、Broker 配置或 RocketMQ 数据，也未更换 Dashboard 镜像。
+- 配置变更：将两个 Broker 主机名都映射到 `172.168.1.160`；候选 Compose 在本地及远端均通过配置校验。
+- 部署：远端备份为 `docker-compose.yml.bak.20260729112932.broker-hosts`，只重建 `rocketmq-go-dashboard` 服务；容器 running/healthy、restart=0、北京时间正确。
+- 网络验证：容器内 `getent hosts` 均返回 `172.168.1.160`，10911 与 10921 TCP 连接成功。
+- 功能验证：`test-160` 集群/能力快照 code=0、stale=false、refreshing=false、lastError 为空；返回主 Broker 与从 Broker，Topic 15 个、Consumer 1 个。
+- 浏览器验证：生产页面选择 `test-160` 后状态“已就绪”，Broker 版本 `V5_2_0`，错误面板隐藏，控制台 0 error/0 warning。
+
+## 2026-07-29T11:45:00+08:00 集群管理功能部署到 93（执行者：Devil）
+
+- Git：提交 `254987b` 已推送到 `origin/codex/goadmin-rocksdb-local`。
+- 镜像：已构建并推送 `is01.jx907.cn/platform/rocketmq-go-dashboard:20260729-1127-cluster-manage-254987b9`，digest 为 `sha256:4ba6bbf1ac7540f7ae03f3140a76a7ad6b2a47acbf39cfd1bf7647fa0115aafd`。
+- 部署：93 Compose 备份为 `docker-compose.yml.bak.20260729113714-cluster-manage`；容器 running/healthy、restart=0、北京时间正确，端口映射和只读凭据、运行卷保持不变。
+- API：`/api/health` 返回 code=0、configuredClusterCount=4；`/api/config` 返回 4 个集群，`clusterManagementEnabled=true`，页面注册集群为 `test-160`。
+- 页面：启动配置集群的编辑/删除按钮禁用，`test-160` 的编辑/删除可用；编辑弹框预填 `172.168.1.160:9876`，取消后未产生写请求。
+- 移动端：390x844 下文档与弹框无横向溢出；生产 API 请求全部 200，控制台 0 error/0 warning。
+
+## 2026-07-29T12:06:04+08:00 main 分支与 v1.0.0 Release 发布（执行者：Devil）
+
+- Git：远端 `main` 已快进到 `254987b954c63c0275c0c165bd993b22415928ad`，本地 `main` 与 `origin/main` 同步。
+- 分支：本地及远端 `codex/goadmin-cli-parallel`、`codex/goadmin-rocksdb-local` 已删除，未发现残留 `codex/*` 分支。
+- Tag：annotated tag `v1.0.0` 已推送，解引用后指向提交 `254987b954c63c0275c0c165bd993b22415928ad`。
+- Release：GitHub Release `v1.0.0` 已发布并标记为 `Latest`，页面为 `https://github.com/biaoxing-github/go-rocketmq-dashboard/releases/tag/v1.0.0`。
+- 边界：未改业务代码；保留工作区原有未提交 `operations-log.md` 修改，不清理来源不明的临时目录。
+
+## 2026-08-11T15:01:20+08:00 Topic 创建串集群排查与本地修复（执行者：Devil）
+
+- CodeGraph：追踪 `POST /api/topics -> handleTopicUpsert -> MQAdminProvider.UpsertTopic -> goadmin/mqadmin`，确认创建命令是 `updateTopic`，报错类来自创建后的 `topicStatus` 查询。
+- 生产审计/API：读取五个集群的 Topic 写审计；`test-49/test` 创建记录成功，但 49 route/status 失败，160 route 成功。
+- 93 只读检查：容器持续健康；`getent hosts` 显示 `rmqbroker-a-master`、`rmqbroker-b-slave` 均被 Compose 全局映射到 `172.168.1.160`。
+- 实现：增加集群级 Broker 地址映射持久化、校验、页面编辑、完整 Provider 工厂传参和独立 mqadmin JVM hosts 注入；映射集群禁用共享 sidecar/native 路径。
+- 验证：TDD 红灯、focused tests、全量 Go 测试、双命令构建、JS 语法、Compose、diff 检查及桌面/移动浏览器检查通过。
+- 边界：未提交、未推送、未部署，未删除 160 上已有的 `test` Topic，也未执行新的 RocketMQ 写操作。

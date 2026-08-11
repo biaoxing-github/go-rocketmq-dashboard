@@ -605,11 +605,12 @@ function renderClusterManagementList() {
       const label = cluster.label || id;
       const actionState = editable ? "" : " disabled";
       const source = editable ? "页面注册" : "启动配置";
+      const mappingCount = Array.isArray(cluster.brokerAddressMappings) ? cluster.brokerAddressMappings.length : 0;
       return `<div class="cluster-management-row">
         <div class="cluster-management-main">
           <strong>${escapeHTML(label)}</strong>
           <code>${escapeHTML(id)} · ${escapeHTML(cluster.nameServer || "-")}</code>
-          <small>${source}</small>
+          <small>${source}${mappingCount > 0 ? ` · 地址映射 ${mappingCount} 条` : ""}</small>
         </div>
         <div class="cluster-management-actions">
           <button class="cluster-icon-button" type="button" data-cluster-action="edit" data-cluster-id="${escapeAttr(id)}" aria-label="编辑 ${escapeAttr(label)}" title="编辑集群"${actionState}>${clusterManagementIcon("edit")}</button>
@@ -645,10 +646,11 @@ function startClusterEdit(clusterID) {
   $("#clusterAddId").value = cluster.id || "";
   $("#clusterAddLabel").value = cluster.label || "";
   $("#clusterAddNameServer").value = cluster.nameServer || "";
+  $("#clusterAddBrokerMappings").value = formatBrokerAddressMappings(cluster.brokerAddressMappings);
   $("#clusterAddDialogTitle").textContent = "修改集群";
   $("#clusterAddSubmit").textContent = "保存修改";
   $("#clusterAddCancel").textContent = "取消修改";
-  $("#clusterAddStatus").textContent = "修改集群 ID、显示名称或 NameServer";
+  $("#clusterAddStatus").textContent = "修改集群连接配置";
   $("#clusterAddId").focus();
 }
 
@@ -732,10 +734,18 @@ async function handleClusterAddSubmit(event) {
   event.preventDefault();
   const form = event.currentTarget;
   const submit = $("#clusterAddSubmit");
+  let brokerAddressMappings;
+  try {
+    brokerAddressMappings = parseBrokerAddressMappings(form.elements.brokerAddressMappings.value);
+  } catch (error) {
+    $("#clusterAddStatus").textContent = errorMessage(error);
+    return;
+  }
   const definition = {
     id: String(form.elements.id.value || "").trim(),
     label: String(form.elements.label.value || "").trim(),
-    nameServer: String(form.elements.nameServer.value || "").trim()
+    nameServer: String(form.elements.nameServer.value || "").trim(),
+    brokerAddressMappings
   };
   if (!definition.id || !definition.nameServer) {
     $("#clusterAddStatus").textContent = "集群 ID 和 NameServer 为必填项";
@@ -772,6 +782,37 @@ async function handleClusterAddSubmit(event) {
   } finally {
     setLoading(submit, false);
   }
+}
+
+// parseBrokerAddressMappings 将每行 host=ip 输入转换为集群定义中的结构化映射。
+function parseBrokerAddressMappings(value) {
+  const mappings = [];
+  const seen = new Set();
+  for (const rawLine of String(value || "").split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line) {
+      continue;
+    }
+    const separator = line.indexOf("=");
+    const host = separator > 0 ? line.slice(0, separator).trim().toLowerCase() : "";
+    const ip = separator > 0 ? line.slice(separator + 1).trim() : "";
+    if (!host || !ip) {
+      throw new Error(`Broker 地址映射格式错误：${line}`);
+    }
+    if (seen.has(host)) {
+      throw new Error(`Broker 地址映射主机名重复：${host}`);
+    }
+    seen.add(host);
+    mappings.push({ host, ip });
+  }
+  return mappings;
+}
+
+// formatBrokerAddressMappings 将服务端结构化映射还原为可编辑的逐行文本。
+function formatBrokerAddressMappings(mappings) {
+  return (Array.isArray(mappings) ? mappings : [])
+    .map((mapping) => `${mapping.host || ""}=${mapping.ip || ""}`)
+    .join("\n");
 }
 
 // currentNameServer 优先显示当前 clusterId 的实时健康结果，缺失时回退到固定定义。

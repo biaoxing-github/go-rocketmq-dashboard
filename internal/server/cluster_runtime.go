@@ -21,6 +21,16 @@ type ClusterDefinition struct {
 	Label string `json:"label"`
 	// NameServer 是该集群的 NameServer 地址。
 	NameServer string `json:"nameServer"`
+	// BrokerAddressMappings 只覆盖当前集群的 Broker 主机名解析，避免同名 Broker 串到其他集群。
+	BrokerAddressMappings []BrokerAddressMapping `json:"brokerAddressMappings,omitempty"`
+}
+
+// BrokerAddressMapping 描述当前集群中一个 Broker 主机名对应的确定 IP 地址。
+type BrokerAddressMapping struct {
+	// Host 是 NameServer 路由返回的 Broker 主机名。
+	Host string `json:"host"`
+	// IP 是 Dashboard 执行该集群命令时应连接的 IP 地址。
+	IP string `json:"ip"`
 }
 
 // clusterRuntime 将 Provider 与所有快照缓存绑定到同一个 clusterId。
@@ -162,6 +172,11 @@ func normalizeClusterDefinitions(definitions []ClusterDefinition, fallbackNameSe
 		if definition.Label == "" {
 			definition.Label = definition.ID
 		}
+		mappings, err := normalizeBrokerAddressMappings(definition.NameServer, definition.BrokerAddressMappings)
+		if err != nil {
+			panic(fmt.Sprintf("集群 %s 的 Broker 地址映射无效: %v", definition.ID, err))
+		}
+		definition.BrokerAddressMappings = mappings
 		if _, exists := seen[definition.ID]; exists {
 			panic("集群 ID 不能重复: " + definition.ID)
 		}
