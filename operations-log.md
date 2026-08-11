@@ -98,3 +98,13 @@
 - 清理前审计：93 共 80 个镜像，Dashboard 仓库镜像 20 个；当前容器使用镜像 ID `sha256:c2a511c65fb54761ca20bb053234fbe659139fc0ae13dcb75c1e5d98a924337f`。
 - 镜像清理：删除未被容器引用的旧 Dashboard `latest` 和 dangling 镜像；镜像对象降至 45 个，Dashboard 仓库仅保留当前运行的 1 个，Docker 报告回收 1.41GB。
 - 运行验证：清理后 Dashboard 镜像 ID 未变化，容器 `running/healthy`、restart=0；未清理任何容器、卷或当前服务镜像。
+
+## 2026-08-11T15:30:22+08:00 Broker 集群级地址映射部署到 93（执行者：Devil）
+
+- 构建发布：从 `f62c213a37ebdd15aa61454c7e07308f2779f96f` 的归档源码构建并推送 `is01.jx907.cn/platform/rocketmq-go-dashboard:20260811-1515-broker-mapping-f62c213a`，Harbor digest 为 `sha256:cda8d5249b379853e3d38934f9117e772b41b851ced4a51216804d75dbb9be2f`。
+- 93 部署：备份 `/home/data/rocketmq-go-dashboard/docker-compose.yml.bak.20260811151819.broker-mapping`，Compose 使用镜像 tag 加 digest 重建 Dashboard；容器 `running/healthy`、restart=0。
+- 集群配置：`test-160` 持久化 `rmqbroker-a-master`、`rmqbroker-b-slave` 到 `172.168.1.160` 的两条映射；`test-49` 持久化 `rmqbroker-a-master` 到 `172.168.1.49` 的一条映射。
+- 写入隔离验证：在 `test-49` 创建临时 Topic `codex_mapping_smoke_20260811` 成功，route/status 均落到 `172.168.1.49:10911`；同名 Topic 在 `test-160` 无路由，随后已从 `test-49` 删除。
+- 快照验证：两套集群的 cluster/topic 快照均有数据且 `lastError=null`，临时 Topic 已从列表消失；`test-49` 页面显示 Broker `V5_2_0`、事务消息支持、Topic 20、Consumer 5。
+- 浏览器验证：集群管理显示 `test-160` 地址映射 2 条、`test-49` 1 条，编辑框值正确；390x844 下 `clientWidth=scrollWidth=390`，控制台 0 error、0 warning。
+- 日志验证：部署后近 30 分钟容器日志未发现 panic、fatal、error 或 failed。
